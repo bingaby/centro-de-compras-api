@@ -224,3 +224,22 @@ app.delete('/api/produtos/:id', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
 });
+const express = require('express');
+const cors = require('cors');
+
+const app = express();
+
+app.use(cors({
+  origin: 'https://www.centrodecompra.com.br', // permite apenas seu site
+  // origin: '*' // permite qualquer origem (para testes)
+}));
+
+// suas rotas abaixo
+app.get('/api/produtos', (req, res) => {
+  // código para retornar produtos
+});
+
+app.listen(process.env.PORT || 3000, () => {
+  console.log('Servidor rodando...');
+});
+
