@@ -1,4 +1,3 @@
-// server.js
 const express = require('express');
 const multer = require('multer');
 const { Octokit } = require('@octokit/core');
@@ -11,8 +10,12 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// Middleware
-app.use(cors());
+// Middleware com CORS configurado corretamente
+app.use(cors({
+  origin: 'https://www.centrodecompra.com.br',
+  methods: ['GET', 'POST', 'DELETE'],
+  allowedHeaders: ['Content-Type']
+}));
 app.use(express.json());
 app.use('/upload', express.static(path.join(__dirname, 'upload')));
 
@@ -84,29 +87,30 @@ app.post('/api/produtos', upload.array('imagens', 3), async (req, res) => {
     console.log('Recebendo POST /api/produtos', req.body, req.files);
     const { nome, descricao, categoria, loja, link, preco } = req.body;
 
-    // Validação dos campos obrigatórios
     if (!nome || !categoria || !loja || !link || !preco) {
       return res.status(400).json({ error: 'Todos os campos são obrigatórios' });
     }
+
     const precoFloat = parseFloat(preco);
     if (isNaN(precoFloat) || precoFloat < 0) {
       return res.status(400).json({ error: 'O preço deve ser um número positivo' });
     }
+
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: 'Pelo menos uma imagem é necessária' });
     }
 
-    // Fazer upload das imagens para o Cloudinary
+    // Upload das imagens
     const imagens = [];
     for (const file of req.files) {
       const result = await cloudinary.uploader.upload(file.path, {
         folder: 'centrodecompra',
       });
       imagens.push(result.secure_url);
-      await fs.unlink(file.path); // Remover arquivo temporário
+      await fs.unlink(file.path); // Remove temporário
     }
 
-    // Carregar produtos.json atual
+    // Carrega produtos existentes
     let produtos = [];
     let sha;
     try {
@@ -118,12 +122,10 @@ app.post('/api/produtos', upload.array('imagens', 3), async (req, res) => {
       produtos = JSON.parse(Buffer.from(response.data.content, 'base64').toString());
       sha = response.data.sha;
     } catch (error) {
-      if (error.status !== 404) {
-        throw error;
-      }
+      if (error.status !== 404) throw error;
     }
 
-    // Adicionar novo produto
+    // Novo produto
     const novoProduto = {
       _id: `${Date.now()}${Math.random().toString(36).substr(2, 9)}`,
       nome,
@@ -136,13 +138,13 @@ app.post('/api/produtos', upload.array('imagens', 3), async (req, res) => {
     };
     produtos.push(novoProduto);
 
-    // Validar tamanho do JSON
+    // Verifica tamanho
     const jsonContent = JSON.stringify(produtos, null, 2);
     if (new TextEncoder().encode(jsonContent).length > 90 * 1024 * 1024) {
       return res.status(400).json({ error: 'produtos.json excede 90 MB' });
     }
 
-    // Atualizar produtos.json no GitHub
+    // Atualiza GitHub
     await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
       owner: 'bingaby',
       repo: 'centrodecompra',
@@ -168,7 +170,6 @@ app.delete('/api/produtos/:id', async (req, res) => {
       return res.status(400).json({ error: 'ID do produto é obrigatório' });
     }
 
-    // Carregar produtos.json do GitHub
     let produtos = [];
     let sha;
     try {
@@ -186,23 +187,21 @@ app.delete('/api/produtos/:id', async (req, res) => {
       throw error;
     }
 
-    // Encontrar e remover produto
     const index = produtos.findIndex((produto) => produto._id === id);
     if (index === -1) {
       return res.status(404).json({ error: 'Produto não encontrado' });
     }
 
-    // Remover imagens do Cloudinary
+    // Remove imagens do Cloudinary
     const imagens = produtos[index].imagens || [];
     for (const imagem of imagens) {
       const publicId = imagem.split('/').pop().split('.')[0];
       await cloudinary.uploader.destroy(`centrodecompra/${publicId}`);
     }
 
-    // Remover produto
+    // Remove produto
     produtos.splice(index, 1);
 
-    // Atualizar produtos.json no GitHub
     const jsonContent = JSON.stringify(produtos, null, 2);
     await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
       owner: 'bingaby',
