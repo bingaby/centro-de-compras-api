@@ -1,5 +1,5 @@
 {
-  "name": "centrodecompra",
+  "name": "centrodecompra-server",
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
@@ -7,11 +7,10 @@
   },
   "dependencies": {
     "express": "^4.17.1",
-    "multer": "^1.4.5",
-    "@octokit/core": "^4.0.0",
+    "multer": "^1.4.5-lts.1",
     "cors": "^2.8.5",
+    "@octokit/core": "^4.0.0",
     "dotenv": "^16.0.0",
-    "cloudinary": "^1.30.0",
-    "pg": "^8.7.3"
+    "cloudinary": "^1.30.0"
   }
 }
