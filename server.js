@@ -2,21 +2,31 @@
 const express = require('express');
 const multer = require('multer');
 const { Octokit } = require('@octokit/core');
+const cloudinary = require('cloudinary').v2;
 const path = require('path');
 const cors = require('cors');
 const fs = require('fs').promises;
 require('dotenv').config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 
 // Middleware
 app.use(cors());
 app.use(express.json());
 app.use('/upload', express.static(path.join(__dirname, 'upload')));
 
-// Criar diretório de upload se não existir
-fs.mkdir('upload', { recursive: true }).catch(console.error);
+// Criar diretório de upload temporário
+fs.mkdir('upload', { recursive: true }).catch((err) =>
+  console.error('Erro ao criar diretório de upload:', err)
+);
+
+// Configuração do Cloudinary
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
 
 // Configuração do multer para upload de imagens
 const storage = multer.diskStorage({
@@ -28,7 +38,7 @@ const storage = multer.diskStorage({
     const nomeProduto = req.body.nome ? req.body.nome.replace(/\s+/g, '-').toLowerCase() : 'produto';
     const ext = path.extname(file.originalname);
     cb(null, `produto_${nomeProduto}-${timestamp}${ext}`);
-  }
+  },
 });
 
 const fileFilter = (req, file, cb) => {
@@ -42,7 +52,7 @@ const fileFilter = (req, file, cb) => {
 const upload = multer({
   storage,
   limits: { fileSize: 2 * 1024 * 1024 }, // Máximo 2MB
-  fileFilter
+  fileFilter,
 });
 
 // Inicializar Octokit
@@ -54,7 +64,7 @@ app.get('/api/produtos', async (req, res) => {
     const response = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
       owner: 'bingaby',
       repo: 'centrodecompra',
-      path: 'produtos.json'
+      path: 'produtos.json',
     });
     const produtos = JSON.parse(Buffer.from(response.data.content, 'base64').toString());
     res.json(produtos);
@@ -71,21 +81,30 @@ app.get('/api/produtos', async (req, res) => {
 // Endpoint para adicionar produto
 app.post('/api/produtos', upload.array('imagens', 3), async (req, res) => {
   try {
+    console.log('Recebendo POST /api/produtos', req.body, req.files);
     const { nome, descricao, categoria, loja, link, preco } = req.body;
 
     // Validação dos campos obrigatórios
     if (!nome || !categoria || !loja || !link || !preco) {
       return res.status(400).json({ error: 'Todos os campos são obrigatórios' });
     }
-    if (parseFloat(preco) < 0) {
-      return res.status(400).json({ error: 'O preço deve ser positivo' });
+    const precoFloat = parseFloat(preco);
+    if (isNaN(precoFloat) || precoFloat < 0) {
+      return res.status(400).json({ error: 'O preço deve ser um número positivo' });
     }
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: 'Pelo menos uma imagem é necessária' });
     }
 
-    // Gerar URLs para imagens
-    const imagens = req.files.map(file => `${process.env.SERVER_URL}/upload/${file.filename}`);
+    // Fazer upload das imagens para o Cloudinary
+    const imagens = [];
+    for (const file of req.files) {
+      const result = await cloudinary.uploader.upload(file.path, {
+        folder: 'centrodecompra',
+      });
+      imagens.push(result.secure_url);
+      await fs.unlink(file.path); // Remover arquivo temporário
+    }
 
     // Carregar produtos.json atual
     let produtos = [];
@@ -94,7 +113,7 @@ app.post('/api/produtos', upload.array('imagens', 3), async (req, res) => {
       const response = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
         owner: 'bingaby',
         repo: 'centrodecompra',
-        path: 'produtos.json'
+        path: 'produtos.json',
       });
       produtos = JSON.parse(Buffer.from(response.data.content, 'base64').toString());
       sha = response.data.sha;
@@ -106,14 +125,14 @@ app.post('/api/produtos', upload.array('imagens', 3), async (req, res) => {
 
     // Adicionar novo produto
     const novoProduto = {
-      _id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+      _id: `${Date.now()}${Math.random().toString(36).substr(2, 9)}`,
       nome,
       descricao,
       categoria,
       loja,
       link,
-      preco: parseFloat(preco),
-      imagens
+      preco: precoFloat,
+      imagens,
     };
     produtos.push(novoProduto);
 
@@ -131,11 +150,8 @@ app.post('/api/produtos', upload.array('imagens', 3), async (req, res) => {
       message: 'Adiciona novo produto via servidor',
       content: Buffer.from(jsonContent).toString('base64'),
       sha,
-      branch: 'main'
+      branch: 'main',
     });
-
-    // Salvar localmente como backup
-    await fs.writeFile('produtos.json', jsonContent);
 
     res.status(201).json({ message: 'Produto adicionado com sucesso', produto: novoProduto });
   } catch (error) {
@@ -145,18 +161,21 @@ app.post('/api/produtos', upload.array('imagens', 3), async (req, res) => {
 });
 
 // Endpoint para excluir produto
-app.delete('/api/produtos/:index', async (req, res) => {
+app.delete('/api/produtos/:id', async (req, res) => {
   try {
-    const index = parseInt(req.params.index);
-    let produtos = [];
-    let sha;
+    const id = req.params.id;
+    if (!id) {
+      return res.status(400).json({ error: 'ID do produto é obrigatório' });
+    }
 
     // Carregar produtos.json do GitHub
+    let produtos = [];
+    let sha;
     try {
       const response = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
         owner: 'bingaby',
         repo: 'centrodecompra',
-        path: 'produtos.json'
+        path: 'produtos.json',
       });
       produtos = JSON.parse(Buffer.from(response.data.content, 'base64').toString());
       sha = response.data.sha;
@@ -167,19 +186,17 @@ app.delete('/api/produtos/:index', async (req, res) => {
       throw error;
     }
 
-    if (index < 0 || index >= produtos.length) {
-      return res.status(400).json({ error: 'Índice inválido' });
+    // Encontrar e remover produto
+    const index = produtos.findIndex((produto) => produto._id === id);
+    if (index === -1) {
+      return res.status(404).json({ error: 'Produto não encontrado' });
     }
 
-    // Remover imagens associadas
+    // Remover imagens do Cloudinary
     const imagens = produtos[index].imagens || [];
     for (const imagem of imagens) {
-      const filePath = path.join(__dirname, 'upload', path.basename(imagem));
-      try {
-        await fs.unlink(filePath);
-      } catch (err) {
-        console.warn(`Imagem ${filePath} não encontrada para exclusão`);
-      }
+      const publicId = imagem.split('/').pop().split('.')[0];
+      await cloudinary.uploader.destroy(`centrodecompra/${publicId}`);
     }
 
     // Remover produto
@@ -194,11 +211,8 @@ app.delete('/api/produtos/:index', async (req, res) => {
       message: 'Remove produto via servidor',
       content: Buffer.from(jsonContent).toString('base64'),
       sha,
-      branch: 'main'
+      branch: 'main',
     });
-
-    // Atualizar arquivo local
-    await fs.writeFile('produtos.json', jsonContent);
 
     res.json({ message: 'Produto excluído com sucesso' });
   } catch (error) {
