@@ -16,9 +16,13 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// Criar diretório uploads
+const uploadsDir = './uploads';
+fs.mkdir(uploadsDir, { recursive: true }).catch(console.error);
+
 // Configuração do Multer
 const storage = multer.diskStorage({
-  destination: './uploads/',
+  destination: uploadsDir,
   filename: (req, file, cb) => {
     cb(null, `${Date.now()}_${file.originalname}`);
   }
@@ -36,6 +40,30 @@ const MAX_PRODUTOS = 1000;
 // Servir arquivos estáticos
 app.use(express.static('public'));
 
+// Inicializar produtos.json se não existir
+async function inicializarProdutosJson() {
+  try {
+    await octokit.repos.getContent({
+      owner: repoOwner,
+      repo: repoName,
+      path: produtosJsonPath
+    });
+  } catch (error) {
+    if (error.status === 404) {
+      console.log('produtos.json não encontrado, criando...');
+      await octokit.repos.createOrUpdateFileContents({
+        owner: repoOwner,
+        repo: repoName,
+        path: produtosJsonPath,
+        message: 'Inicializa produtos.json',
+        content: Buffer.from(JSON.stringify([])).toString('base64')
+      });
+    } else {
+      throw error;
+    }
+  }
+}
+
 // Endpoint para obter produtos
 app.get('/api/produtos', async (req, res) => {
   try {
@@ -43,19 +71,43 @@ app.get('/api/produtos', async (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
     const startIndex = (page - 1) * limit;
 
-    const { data } = await octokit.repos.getContent({
-      owner: repoOwner,
-      repo: repoName,
-      path: produtosJsonPath
-    });
+    let data;
+    try {
+      const response = await octokit.repos.getContent({
+        owner: repoOwner,
+        repo: repoName,
+        path: produtosJsonPath
+      });
+      data = response.data;
+    } catch (error) {
+      if (error.status === 404) {
+        await inicializarProdutosJson();
+        return res.json([]);
+      }
+      throw error;
+    }
 
-    const produtos = JSON.parse(Buffer.from(data.content, 'base64').toString('utf8'));
+    let produtos;
+    try {
+      produtos = JSON.parse(Buffer.from(data.content, 'base64').toString('utf8'));
+    } catch (error) {
+      console.error('Erro ao parsear produtos.json:', error);
+      throw new Error('Arquivo produtos.json corrompido');
+    }
+
+    if (!Array.isArray(produtos)) {
+      throw new Error('produtos.json não é uma lista válida');
+    }
+
     const produtosFiltrados = produtos.slice(startIndex, startIndex + limit);
-
     res.json(produtosFiltrados);
   } catch (error) {
-    console.error('Erro ao obter produtos:', error);
-    res.status(500).json({ error: 'Erro ao buscar produtos' });
+    console.error('Erro ao obter produtos:', {
+      message: error.message,
+      status: error.status,
+      stack: error.stack
+    });
+    res.status(500).json({ error: 'Erro ao buscar produtos', details: error.message });
   }
 });
 
@@ -114,12 +166,12 @@ app.post('/api/produtos', upload, async (req, res) => {
     });
 
     // Remover arquivos locais
-    await Promise.all(imagens.map(file => fs.unlink(file.path)));
+    await Promise.all(imagens.map(file => fs.unlink(file.path).catch(console.error)));
 
     res.status(201).json({ message: 'Produto adicionado com sucesso' });
   } catch (error) {
     console.error('Erro ao adicionar produto:', error);
-    res.status(500).json({ error: 'Erro ao adicionar produto' });
+    res.status(500).json({ error: 'Erro ao adicionar produto', details: error.message });
   }
 });
 
@@ -176,10 +228,16 @@ app.delete('/api/produtos/:id', async (req, res) => {
     res.json({ message: 'Produto excluído com sucesso' });
   } catch (error) {
     console.error('Erro ao excluir produto:', error);
-    res.status(500).json({ error: 'Erro ao excluir produto' });
+    res.status(500).json({ error: 'Erro ao excluir produto', details: error.message });
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
+// Inicializar servidor
+inicializarProdutosJson().then(() => {
+  app.listen(PORT, () => {
+    console.log(`Servidor rodando na porta ${PORT}`);
+  });
+}).catch(error => {
+  console.error('Erro ao inicializar servidor:', error);
+  process.exit(1);
 });
