@@ -4,6 +4,7 @@ const { Octokit } = require('@octokit/core');
 const path = require('path');
 const cors = require('cors');
 const fs = require('fs').promises;
+const fsSync = require('fs'); // para check síncrono da pasta
 require('dotenv').config();
 
 const app = express();
@@ -19,11 +20,22 @@ app.use(cors({
 
 app.use(express.json());
 
-// Servir imagens da pasta local (opcional para teste)
-app.use('/upload', express.static(path.join(__dirname, 'upload')));
+// Garantir que a pasta "upload" exista e tenha permissão de escrita
+async function garantePastaUpload() {
+  try {
+    await fs.mkdir('upload', { recursive: true });
+    // Testar permissão de escrita criando um arquivo temporário e removendo em seguida
+    const testPath = path.join('upload', '.perm_test');
+    await fs.writeFile(testPath, 'teste');
+    await fs.unlink(testPath);
+  } catch (err) {
+    console.error('Erro ao garantir pasta upload com permissão de escrita:', err);
+    process.exit(1); // encerra app se não der para garantir pasta
+  }
+}
+garantePastaUpload();
 
-// Garantir que a pasta "upload" exista
-fs.mkdir('upload', { recursive: true }).catch(console.error);
+app.use('/upload', express.static(path.join(__dirname, 'upload')));
 
 const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
 
@@ -39,7 +51,11 @@ const storage = multer.diskStorage({
 });
 
 const fileFilter = (req, file, cb) => {
-  file.mimetype.startsWith('image/') ? cb(null, true) : cb(new Error('Apenas imagens são permitidas!'), false);
+  if (file.mimetype.startsWith('image/')) {
+    cb(null, true);
+  } else {
+    cb(new Error('Apenas imagens são permitidas!'), false);
+  }
 };
 
 const upload = multer({
@@ -81,20 +97,25 @@ async function uploadImagemGitHub(nomeArquivo, caminhoLocal) {
 
 // Função para deletar imagem do GitHub
 async function deletarArquivoGitHub(caminhoArquivo) {
-  const resGet = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
-    owner: 'bingaby',
-    repo: 'centrodecompra',
-    path: caminhoArquivo,
-  });
-  const sha = resGet.data.sha;
-  await octokit.request('DELETE /repos/{owner}/{repo}/contents/{path}', {
-    owner: 'bingaby',
-    repo: 'centrodecompra',
-    path: caminhoArquivo,
-    message: `Remove arquivo ${caminhoArquivo}`,
-    sha,
-    branch: 'main',
-  });
+  try {
+    const resGet = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
+      owner: 'bingaby',
+      repo: 'centrodecompra',
+      path: caminhoArquivo,
+    });
+    const sha = resGet.data.sha;
+    await octokit.request('DELETE /repos/{owner}/{repo}/contents/{path}', {
+      owner: 'bingaby',
+      repo: 'centrodecompra',
+      path: caminhoArquivo,
+      message: `Remove arquivo ${caminhoArquivo}`,
+      sha,
+      branch: 'main',
+    });
+  } catch (error) {
+    console.warn(`Aviso: erro ao deletar imagem no GitHub (${caminhoArquivo}): ${error.message}`);
+    // Aqui não lança erro para não travar o processo
+  }
 }
 
 // GET produtos
@@ -136,7 +157,7 @@ app.post('/api/produtos', upload.array('imagens', 3), async (req, res) => {
     for (const file of req.files) {
       const urlImagem = await uploadImagemGitHub(file.filename, file.path);
       imagens.push(urlImagem);
-      await fs.unlink(file.path); // Apagar arquivo local
+      await fs.unlink(file.path); // Apagar arquivo local após upload
     }
 
     // Buscar e atualizar produtos.json
@@ -203,15 +224,12 @@ app.delete('/api/produtos/:id', async (req, res) => {
     const index = produtos.findIndex((produto) => produto._id === id);
     if (index === -1) return res.status(404).json({ error: 'Produto não encontrado' });
 
+    // Deletar imagens do GitHub (se existirem)
     for (const imagemUrl of produtos[index].imagens || []) {
       const partes = imagemUrl.split('/');
       const nomeArquivo = partes[partes.length - 1];
       const caminhoGitHub = `imagens/${nomeArquivo}`;
-      try {
-        await deletarArquivoGitHub(caminhoGitHub);
-      } catch (e) {
-        console.warn(`Erro ao deletar imagem ${nomeArquivo}: ${e.message}`);
-      }
+      await deletarArquivoGitHub(caminhoGitHub);
     }
 
     produtos.splice(index, 1);
