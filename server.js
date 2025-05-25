@@ -6,19 +6,27 @@ const fs = require('fs').promises;
 const cors = require('cors');
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 10000;
 
 // Configuração CORS
 app.use(cors({
-  origin: ['https://www.centrodecompra.com.br', 'http://localhost:8080'],
+  origin: ['https://www.centrodecompra.com.br', 'http://localhost:8080', 'http://localhost:10000'],
   methods: ['GET', 'POST', 'DELETE'],
   allowedHeaders: ['Content-Type']
 }));
 app.use(express.json());
 
+// Verificar GITHUB_TOKEN
+if (!process.env.GITHUB_TOKEN) {
+  console.error('Erro: GITHUB_TOKEN não configurado');
+  process.exit(1);
+}
+
 // Criar diretório uploads
 const uploadsDir = './uploads';
-fs.mkdir(uploadsDir, { recursive: true }).catch(console.error);
+fs.mkdir(uploadsDir, { recursive: true }).catch(error => {
+  console.error('Erro ao criar diretório uploads:', error);
+});
 
 // Configuração do Multer
 const storage = multer.diskStorage({
@@ -40,14 +48,16 @@ const MAX_PRODUTOS = 1000;
 // Servir arquivos estáticos
 app.use(express.static('public'));
 
-// Inicializar produtos.json se não existir
+// Inicializar produtos.json
 async function inicializarProdutosJson() {
   try {
+    console.log('Verificando produtos.json...');
     await octokit.repos.getContent({
       owner: repoOwner,
       repo: repoName,
       path: produtosJsonPath
     });
+    console.log('produtos.json encontrado');
   } catch (error) {
     if (error.status === 404) {
       console.log('produtos.json não encontrado, criando...');
@@ -58,7 +68,9 @@ async function inicializarProdutosJson() {
         message: 'Inicializa produtos.json',
         content: Buffer.from(JSON.stringify([])).toString('base64')
       });
+      console.log('produtos.json criado com sucesso');
     } else {
+      console.error('Erro ao verificar produtos.json:', error);
       throw error;
     }
   }
@@ -70,6 +82,8 @@ app.get('/api/produtos', async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
     const startIndex = (page - 1) * limit;
+
+    console.log(`GET /api/produtos?page=${page}&limit=${limit}`);
 
     let data;
     try {
@@ -84,6 +98,7 @@ app.get('/api/produtos', async (req, res) => {
         await inicializarProdutosJson();
         return res.json([]);
       }
+      console.error('Erro ao acessar produtos.json:', error);
       throw error;
     }
 
@@ -96,6 +111,7 @@ app.get('/api/produtos', async (req, res) => {
     }
 
     if (!Array.isArray(produtos)) {
+      console.error('produtos.json não é uma lista válida:', produtos);
       throw new Error('produtos.json não é uma lista válida');
     }
 
@@ -116,6 +132,8 @@ app.post('/api/produtos', upload, async (req, res) => {
   try {
     const { nome, idProduto, descricao, categoria, loja, link, preco } = req.body;
     const imagens = req.files || [];
+
+    console.log(`POST /api/produtos: ${nome}`);
 
     // Verificar limite de produtos
     const { data: currentData } = await octokit.repos.getContent({
@@ -141,7 +159,9 @@ app.post('/api/produtos', upload, async (req, res) => {
         content: imagemContent.toString('base64')
       });
 
-      return `https://raw.githubusercontent.com/${repoOwner}/${repoName}/main/${imagemPath}`;
+      const url = `https://raw.githubusercontent.com/${repoOwner}/${repoName}/main/${imagemPath}`;
+      console.log(`Imagem carregada: ${url}`);
+      return url;
     }));
 
     // Atualizar produtos.json
@@ -179,6 +199,7 @@ app.post('/api/produtos', upload, async (req, res) => {
 app.delete('/api/produtos/:id', async (req, res) => {
   try {
     const idProduto = req.params.id;
+    console.log(`DELETE /api/produtos/${idProduto}`);
 
     const { data } = await octokit.repos.getContent({
       owner: repoOwner,
@@ -208,6 +229,7 @@ app.delete('/api/produtos/:id', async (req, res) => {
           message: `Remove imagem ${imagemPath}`,
           sha: imagemData.sha
         });
+        console.log(`Imagem removida: ${imagemPath}`);
       } catch (error) {
         console.warn(`Imagem ${imagemPath} não encontrada`, error);
       }
@@ -235,7 +257,7 @@ app.delete('/api/produtos/:id', async (req, res) => {
 // Inicializar servidor
 inicializarProdutosJson().then(() => {
   app.listen(PORT, () => {
-    console.log(`Servidor rodando na porta ${PORT}`);
+    console.log(`✅ Servidor rodando em http://localhost:${PORT}`);
   });
 }).catch(error => {
   console.error('Erro ao inicializar servidor:', error);
