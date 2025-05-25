@@ -9,6 +9,7 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 10000;
 
+// CORS
 app.use(cors({
   origin: 'https://www.centrodecompra.com.br',
   methods: ['GET', 'POST', 'DELETE'],
@@ -17,12 +18,16 @@ app.use(cors({
 }));
 
 app.use(express.json());
+
+// Servir imagens da pasta local (opcional para teste)
 app.use('/upload', express.static(path.join(__dirname, 'upload')));
 
+// Garantir que a pasta "upload" exista
 fs.mkdir('upload', { recursive: true }).catch(console.error);
 
 const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
 
+// Configuração do multer
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, 'upload/'),
   filename: (req, file, cb) => {
@@ -39,11 +44,11 @@ const fileFilter = (req, file, cb) => {
 
 const upload = multer({
   storage,
-  limits: { fileSize: 2 * 1024 * 1024 }, // 2MB max
+  limits: { fileSize: 2 * 1024 * 1024 }, // 2MB
   fileFilter,
 });
 
-// Função para upload de uma imagem para GitHub
+// Função para upload da imagem para GitHub
 async function uploadImagemGitHub(nomeArquivo, caminhoLocal) {
   const conteudoBuffer = await fs.readFile(caminhoLocal);
   const conteudoBase64 = conteudoBuffer.toString('base64');
@@ -71,11 +76,10 @@ async function uploadImagemGitHub(nomeArquivo, caminhoLocal) {
     branch: 'main',
   });
 
-  // URL raw para acesso direto ao arquivo no GitHub
   return `https://raw.githubusercontent.com/bingaby/centrodecompra/main/${caminhoGitHub}`;
 }
 
-// Função para deletar arquivo do GitHub
+// Função para deletar imagem do GitHub
 async function deletarArquivoGitHub(caminhoArquivo) {
   const resGet = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
     owner: 'bingaby',
@@ -104,13 +108,13 @@ app.get('/api/produtos', async (req, res) => {
     const produtos = JSON.parse(Buffer.from(response.data.content, 'base64').toString());
     res.json(produtos);
   } catch (error) {
-    console.error(error);
     if (error.status === 404) return res.json([]);
+    console.error(error);
     res.status(500).json({ error: 'Erro ao carregar produtos' });
   }
 });
 
-// POST produto
+// POST produto com imagens
 app.post('/api/produtos', upload.array('imagens', 3), async (req, res) => {
   try {
     const { nome, descricao, categoria, loja, link, preco } = req.body;
@@ -128,16 +132,14 @@ app.post('/api/produtos', upload.array('imagens', 3), async (req, res) => {
       return res.status(400).json({ error: 'Pelo menos uma imagem é necessária' });
     }
 
-    // Upload imagens para GitHub
     const imagens = [];
     for (const file of req.files) {
-      const nomeArquivo = file.filename;
-      const urlImagem = await uploadImagemGitHub(nomeArquivo, file.path);
+      const urlImagem = await uploadImagemGitHub(file.filename, file.path);
       imagens.push(urlImagem);
-      await fs.unlink(file.path); // apaga arquivo local
+      await fs.unlink(file.path); // Apagar arquivo local
     }
 
-    // Busca produtos.json
+    // Buscar e atualizar produtos.json
     let produtos = [];
     let sha;
     try {
@@ -162,6 +164,7 @@ app.post('/api/produtos', upload.array('imagens', 3), async (req, res) => {
       preco: precoFloat,
       imagens,
     };
+
     produtos.push(novoProduto);
 
     const jsonContent = JSON.stringify(produtos, null, 2);
@@ -187,30 +190,27 @@ app.post('/api/produtos', upload.array('imagens', 3), async (req, res) => {
 app.delete('/api/produtos/:id', async (req, res) => {
   try {
     const id = req.params.id;
-    if (!id) return res.status(400).json({ error: 'ID obrigatório' });
 
-    // Busca produtos.json
     const response = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
       owner: 'bingaby',
       repo: 'centrodecompra',
       path: 'produtos.json',
     });
+
     let produtos = JSON.parse(Buffer.from(response.data.content, 'base64').toString());
     const sha = response.data.sha;
 
     const index = produtos.findIndex((produto) => produto._id === id);
     if (index === -1) return res.status(404).json({ error: 'Produto não encontrado' });
 
-    // Apaga imagens do GitHub
     for (const imagemUrl of produtos[index].imagens || []) {
-      // Extrai nome arquivo da URL
       const partes = imagemUrl.split('/');
       const nomeArquivo = partes[partes.length - 1];
       const caminhoGitHub = `imagens/${nomeArquivo}`;
       try {
         await deletarArquivoGitHub(caminhoGitHub);
       } catch (e) {
-        console.warn(`Erro ao deletar imagem ${nomeArquivo}`, e.message);
+        console.warn(`Erro ao deletar imagem ${nomeArquivo}: ${e.message}`);
       }
     }
 
