@@ -24,7 +24,6 @@ app.use(express.json());
 async function garantePastaUpload() {
   try {
     await fs.mkdir('upload', { recursive: true });
-    // Testar permissão de escrita criando um arquivo temporário e removendo em seguida
     const testPath = path.join('upload', '.perm_test');
     await fs.writeFile(testPath, 'teste');
     await fs.unlink(testPath);
@@ -114,7 +113,6 @@ async function deletarArquivoGitHub(caminhoArquivo) {
     });
   } catch (error) {
     console.warn(`Aviso: erro ao deletar imagem no GitHub (${caminhoArquivo}): ${error.message}`);
-    // Não lança erro para não travar o processo
   }
 }
 
@@ -122,10 +120,10 @@ async function deletarArquivoGitHub(caminhoArquivo) {
 app.get('/api/produtos', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 25; // Limite padrão de 25 itens
-    const skip = (page - 1) * limit;
+    const limit = req.query.limit ? parseInt(req.query.limit) : null; // Sem limite padrão para admin
+    const skip = limit ? (page - 1) * limit : 0;
 
-    console.log(`Requisição GET /api/produtos: page=${page}, limit=${limit}, skip=${skip}`);
+    console.log(`Requisição GET /api/produtos: page=${page}, limit=${limit || 'nenhum'}, skip=${skip}`);
 
     const response = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
       owner: 'bingaby',
@@ -136,8 +134,8 @@ app.get('/api/produtos', async (req, res) => {
     const produtos = JSON.parse(Buffer.from(response.data.content, 'base64').toString());
     const total = produtos.length;
 
-    // Aplicar paginação no array de produtos
-    const produtosPaginados = produtos.slice(skip, skip + limit);
+    // Aplicar paginação apenas se limit for especificado
+    const produtosPaginados = limit ? produtos.slice(skip, skip + limit) : produtos;
 
     console.log(`Retornando ${produtosPaginados.length} produtos, Total: ${total}`);
 
@@ -174,7 +172,6 @@ app.post('/api/produtos', upload.array('imagens', 3), async (req, res) => {
       await fs.unlink(file.path);
     }
 
-    // Buscar e atualizar produtos.json
     let produtos = [];
     let sha;
     try {
