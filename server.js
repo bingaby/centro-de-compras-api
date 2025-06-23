@@ -13,14 +13,14 @@ const PORT = process.env.PORT || 10000;
 // CORS
 app.use(cors({
   origin: 'https://www.centrodecompra.com.br',
-  methods: ['GET', 'POST', 'DELETE'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type'],
   credentials: false
 }));
 
 app.use(express.json());
 
-// Garantir que a pasta "upload" exista e tenha permissão de escrita
+// Garantir que a pasta "upload" exista
 async function garantePastaUpload() {
   try {
     await fs.mkdir('upload', { recursive: true });
@@ -120,7 +120,7 @@ async function deletarArquivoGitHub(caminhoArquivo) {
 app.get('/api/produtos', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
-    const limit = req.query.limit ? parseInt(req.query.limit) : null; // Sem limite padrão para admin
+    const limit = req.query.limit ? parseInt(req.query.limit) : null;
     const skip = limit ? (page - 1) * limit : 0;
 
     console.log(`Requisição GET /api/produtos: page=${page}, limit=${limit || 'nenhum'}, skip=${skip}`);
@@ -134,7 +134,6 @@ app.get('/api/produtos', async (req, res) => {
     const produtos = JSON.parse(Buffer.from(response.data.content, 'base64').toString());
     const total = produtos.length;
 
-    // Aplicar paginação apenas se limit for especificado
     const produtosPaginados = limit ? produtos.slice(skip, skip + limit) : produtos;
 
     console.log(`Retornando ${produtosPaginados.length} produtos, Total: ${total}`);
@@ -147,7 +146,31 @@ app.get('/api/produtos', async (req, res) => {
   }
 });
 
-// POST produto com imagens
+// GET produto por ID
+app.get('/api/produtos/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const response = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
+      owner: 'bingaby',
+      repo: 'centrodecompra',
+      path: 'produtos.json',
+    });
+
+    const produtos = JSON.parse(Buffer.from(response.data.content, 'base64').toString());
+    const produto = produtos.find(p => p._id === id);
+
+    if (!produto) {
+      return res.status(404).json({ error: 'Produto não encontrado' });
+    }
+
+    res.json(produto);
+  } catch (error) {
+    console.error('Erro na rota GET /api/produtos/:id:', error);
+    res.status(500).json({ error: 'Erro ao buscar produto', details: error.message });
+  }
+});
+
+// POST produto
 app.post('/api/produtos', upload.array('imagens', 3), async (req, res) => {
   try {
     const { nome, descricao, categoria, loja, link, preco } = req.body;
@@ -161,15 +184,13 @@ app.post('/api/produtos', upload.array('imagens', 3), async (req, res) => {
       return res.status(400).json({ error: 'Preço inválido' });
     }
 
-    if (!req.files || req.files.length === 0) {
-      return res.status(400).json({ error: 'Pelo menos uma imagem é necessária' });
-    }
-
     const imagens = [];
-    for (const file of req.files) {
-      const urlImagem = await uploadImagemGitHub(file.filename, file.path);
-      imagens.push(urlImagem);
-      await fs.unlink(file.path);
+    if (req.files && req.files.length > 0) {
+      for (const file of req.files) {
+        const urlImagem = await uploadImagemGitHub(file.filename, file.path);
+        imagens.push(urlImagem);
+        await fs.unlink(file.path);
+      }
     }
 
     let produtos = [];
@@ -212,10 +233,89 @@ app.post('/api/produtos', upload.array('imagens', 3), async (req, res) => {
     });
 
     res.status(201).json({ message: 'Produto adicionado com sucesso', produto: novoProduto });
-
   } catch (error) {
     console.error('Erro ao adicionar produto:', error);
     res.status(500).json({ error: error.message || 'Erro ao adicionar produto' });
+  }
+});
+
+// PUT produto
+app.put('/api/produtos/:id', upload.array('imagens', 3), async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { nome, descricao, categoria, loja, link, preco } = req.body;
+
+    if (!nome || !categoria || !loja || !link || !preco) {
+      return res.status(400).json({ error: 'Todos os campos são obrigatórios' });
+    }
+
+    const precoFloat = parseFloat(preco);
+    if (isNaN(precoFloat) || precoFloat < 0) {
+      return res.status(400).json({ error: 'Preço inválido' });
+    }
+
+    const response = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
+      owner: 'bingaby',
+      repo: 'centrodecompra',
+      path: 'produtos.json',
+    });
+
+    let produtos = JSON.parse(Buffer.from(response.data.content, 'base64').toString());
+    const sha = response.data.sha;
+
+    const produtoIndex = produtos.findIndex(p => p._id === id);
+    if (produtoIndex === -1) {
+      return res.status(404).json({ error: 'Produto não encontrado' });
+    }
+
+    const imagens = [];
+    if (req.files && req.files.length > 0) {
+      for (const file of req.files) {
+        const urlImagem = await uploadImagemGitHub(file.filename, file.path);
+        imagens.push(urlImagem);
+        await fs.unlink(file.path);
+      }
+    }
+
+    // Manter imagens existentes se nenhuma nova for enviada
+    const imagensAtualizadas = imagens.length > 0 ? imagens : produtos[produtoIndex].imagens;
+
+    // Deletar imagens antigas do GitHub se novas imagens foram enviadas
+    if (imagens.length > 0 && produtos[produtoIndex].imagens && produtos[produtoIndex].imagens.length > 0) {
+      for (const urlImagem of produtos[produtoIndex].imagens) {
+        const urlObj = new URL(urlImagem);
+        const caminhoArquivo = urlObj.pathname.split('/').slice(4).join('/');
+        await deletarArquivoGitHub(caminhoArquivo);
+      }
+    }
+
+    produtos[produtoIndex] = {
+      _id: id,
+      nome,
+      descricao,
+      categoria,
+      loja,
+      link,
+      preco: precoFloat,
+      imagens: imagensAtualizadas,
+    };
+
+    const jsonContent = JSON.stringify(produtos, null, 2);
+
+    await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
+      owner: 'bingaby',
+      repo: 'centrodecompra',
+      path: 'produtos.json',
+      message: `Atualiza produto ${id} via API`,
+      content: Buffer.from(jsonContent).toString('base64'),
+      sha,
+      branch: 'main',
+    });
+
+    res.json({ message: 'Produto atualizado com sucesso', produto: produtos[produtoIndex] });
+  } catch (error) {
+    console.error('Erro ao atualizar produto:', error);
+    res.status(500).json({ error: error.message || 'Erro ao atualizar produto' });
   }
 });
 
@@ -262,7 +362,6 @@ app.delete('/api/produtos/:id', async (req, res) => {
     });
 
     res.json({ message: 'Produto excluído com sucesso' });
-
   } catch (error) {
     console.error('Erro ao excluir produto:', error);
     res.status(500).json({ error: 'Erro ao excluir produto' });
