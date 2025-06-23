@@ -118,20 +118,34 @@ async function deletarArquivoGitHub(caminhoArquivo) {
   }
 }
 
-// GET produtos
+// GET produtos com paginação
 app.get('/api/produtos', async (req, res) => {
   try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 25; // Limite padrão de 25 itens
+    const skip = (page - 1) * limit;
+
+    console.log(`Requisição GET /api/produtos: page=${page}, limit=${limit}, skip=${skip}`);
+
     const response = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
       owner: 'bingaby',
       repo: 'centrodecompra',
       path: 'produtos.json',
     });
+
     const produtos = JSON.parse(Buffer.from(response.data.content, 'base64').toString());
-    res.json(produtos);
+    const total = produtos.length;
+
+    // Aplicar paginação no array de produtos
+    const produtosPaginados = produtos.slice(skip, skip + limit);
+
+    console.log(`Retornando ${produtosPaginados.length} produtos, Total: ${total}`);
+
+    res.json({ produtos: produtosPaginados, total });
   } catch (error) {
-    if (error.status === 404) return res.json([]);
-    console.error(error);
-    res.status(500).json({ error: 'Erro ao carregar produtos' });
+    if (error.status === 404) return res.json({ produtos: [], total: 0 });
+    console.error('Erro na rota GET /api/produtos:', error);
+    res.status(500).json({ error: 'Erro ao carregar produtos', details: error.message });
   }
 });
 
