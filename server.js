@@ -1,93 +1,373 @@
 const express = require('express');
+const multer = require('multer');
+const { Octokit } = require('@octokit/core');
+const path = require('path');
 const cors = require('cors');
-const jwt = require('jsonwebtoken');
+const fs = require('fs').promises;
+const fsSync = require('fs');
+require('dotenv').config();
 
 const app = express();
+const PORT = process.env.PORT || 10000;
 
-// Configuração do CORS
-const corsOptions = {
-  origin: 'https://www.centrodecompra.com.br', // Domínio do frontend
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Métodos permitidos
-  allowedHeaders: ['Content-Type', 'Authorization'], // Cabeçalhos permitidos
-  credentials: true, // Permite credenciais (para cookies ou autenticação)
-};
+// CORS
+app.use(cors({
+  origin: 'https://www.centrodecompra.com.br',
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type'],
+  credentials: false
+}));
 
-// Aplicar CORS globalmente
-app.use(cors(corsOptions));
-
-// Garantir que requisições OPTIONS sejam tratadas explicitamente
-app.options('*', cors(corsOptions));
-
-// Middleware para parsing de JSON
 app.use(express.json());
 
-// Middleware de autenticação com JWT
-const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-  if (!token) {
-    return res.status(401).json({ error: 'Token não fornecido' });
-  }
+// Garantir que a pasta "upload" exista
+async function garantePastaUpload() {
   try {
-    jwt.verify(token, 'sua-chave-secreta', (err, user) => {
-      if (err) {
-        return res.status(403).json({ error: 'Token inválido', details: err.message });
-      }
-      req.user = user;
-      next();
-    });
-  } catch (error) {
-    return res.status(403).json({ error: 'Erro ao verificar token', details: error.message });
+    await fs.mkdir('upload', { recursive: true });
+    const testPath = path.join('upload', '.perm_test');
+    await fs.writeFile(testPath, 'teste');
+    await fs.unlink(testPath);
+  } catch (err) {
+    console.error('Erro ao garantir pasta upload com permissão de escrita:', err);
+    process.exit(1);
+  }
+}
+garantePastaUpload();
+
+app.use('/upload', express.static(path.join(__dirname, 'upload')));
+
+const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
+
+// Configuração do multer
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, 'upload/'),
+  filename: (req, file, cb) => {
+    const timestamp = Date.now();
+    const nomeProduto = req.body.nome ? req.body.nome.replace(/\s+/g, '-').toLowerCase() : 'produto';
+    const ext = path.extname(file.originalname);
+    cb(null, `produto_${nomeProduto}-${timestamp}${ext}`);
+  },
+});
+
+const fileFilter = (req, file, cb) => {
+  if (file.mimetype.startsWith('image/')) {
+    cb(null, true);
+  } else {
+    cb(new Error('Apenas imagens são permitidas!'), false);
   }
 };
 
-// Rota de login
-app.post('/api/login', (req, res) => {
-  const { username, password } = req.body;
-  // Credenciais fixas para demonstração
-  if (username === 'Princesaeloah' && password === '13082015') {
-    const token = jwt.sign({ user: username }, 'sua-chave-secreta', { expiresIn: '1h' });
-    return res.json({ token });
+const upload = multer({
+  storage,
+  limits: { fileSize: 2 * 1024 * 1024 }, // 2MB
+  fileFilter,
+});
+
+// Função para upload da imagem para GitHub
+async function uploadImagemGitHub(nomeArquivo, caminhoLocal) {
+  const conteudoBuffer = await fs.readFile(caminhoLocal);
+  const conteudoBase64 = conteudoBuffer.toString('base64');
+  const caminhoGitHub = `imagens/${nomeArquivo}`;
+  let sha;
+
+  try {
+    const resGet = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
+      owner: 'bingaby',
+      repo: 'centrodecompra',
+      path: caminhoGitHub,
+    });
+    sha = resGet.data.sha;
+  } catch (e) {
+    if (e.status !== 404) throw e;
   }
-  return res.status(401).json({ error: 'Credenciais inválidas' });
-});
 
-// Rotas de produtos (protegidas)
-app.get('/api/produtos', authenticateToken, (req, res) => {
-  // Lógica fictícia para retornar produtos
-  const produtos = [
-    { _id: '1', nome: 'Produto 1', categoria: 'eletronicos', loja: 'loja1', imagens: ['imagens/produto1.jpg'], link: '#' },
-    { _id: '2', nome: 'Produto 2', categoria: 'roupas', loja: 'loja2', imagens: ['imagens/produto2.jpg'], link: '#' },
-    // Adicione mais produtos conforme necessário
-  ];
-  res.json({
-    produtos,
-    total: produtos.length,
+  await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
+    owner: 'bingaby',
+    repo: 'centrodecompra',
+    path: caminhoGitHub,
+    message: `Upload da imagem ${nomeArquivo}`,
+    content: conteudoBase64,
+    sha,
+    branch: 'main',
   });
+
+  return `https://raw.githubusercontent.com/bingaby/centrodecompra/main/${caminhoGitHub}`;
+}
+
+// Função para deletar imagem do GitHub
+async function deletarArquivoGitHub(caminhoArquivo) {
+  try {
+    const resGet = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
+      owner: 'bingaby',
+      repo: 'centrodecompra',
+      path: caminhoArquivo,
+    });
+    const sha = resGet.data.sha;
+    await octokit.request('DELETE /repos/{owner}/{repo}/contents/{path}', {
+      owner: 'bingaby',
+      repo: 'centrodecompra',
+      path: caminhoArquivo,
+      message: `Remove arquivo ${caminhoArquivo}`,
+      sha,
+      branch: 'main',
+    });
+  } catch (error) {
+    console.warn(`Aviso: erro ao deletar imagem no GitHub (${caminhoArquivo}): ${error.message}`);
+  }
+}
+
+// GET produtos com paginação
+app.get('/api/produtos', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = req.query.limit ? parseInt(req.query.limit) : null;
+    const skip = limit ? (page - 1) * limit : 0;
+
+    console.log(`Requisição GET /api/produtos: page=${page}, limit=${limit || 'nenhum'}, skip=${skip}`);
+
+    const response = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
+      owner: 'bingaby',
+      repo: 'centrodecompra',
+      path: 'produtos.json',
+    });
+
+    const produtos = JSON.parse(Buffer.from(response.data.content, 'base64').toString());
+    const total = produtos.length;
+
+    const produtosPaginados = limit ? produtos.slice(skip, skip + limit) : produtos;
+
+    console.log(`Retornando ${produtosPaginados.length} produtos, Total: ${total}`);
+
+    res.json({ produtos: produtosPaginados, total });
+  } catch (error) {
+    if (error.status === 404) return res.json({ produtos: [], total: 0 });
+    console.error('Erro na rota GET /api/produtos:', error);
+    res.status(500).json({ error: 'Erro ao carregar produtos', details: error.message });
+  }
 });
 
-app.get('/api/produtos/:id', authenticateToken, (req, res) => {
-  // Lógica fictícia para retornar um produto específico
-  res.json({ _id: req.params.id, nome: `Produto ${req.params.id}` });
+// GET produto por ID
+app.get('/api/produtos/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const response = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
+      owner: 'bingaby',
+      repo: 'centrodecompra',
+      path: 'produtos.json',
+    });
+
+    const produtos = JSON.parse(Buffer.from(response.data.content, 'base64').toString());
+    const produto = produtos.find(p => p._id === id);
+
+    if (!produto) {
+      return res.status(404).json({ error: 'Produto não encontrado' });
+    }
+
+    res.json(produto);
+  } catch (error) {
+    console.error('Erro na rota GET /api/produtos/:id:', error);
+    res.status(500).json({ error: 'Erro ao buscar produto', details: error.message });
+  }
 });
 
-app.post('/api/produtos', authenticateToken, (req, res) => {
-  // Lógica para adicionar produto
-  res.json({ message: 'Produto adicionado' });
+// POST produto
+app.post('/api/produtos', upload.array('imagens', 3), async (req, res) => {
+  try {
+    const { nome, descricao, categoria, loja, link, preco } = req.body;
+
+    if (!nome || !categoria || !loja || !link || !preco) {
+      return res.status(400).json({ error: 'Todos os campos são obrigatórios' });
+    }
+
+    const precoFloat = parseFloat(preco);
+    if (isNaN(precoFloat) || precoFloat < 0) {
+      return res.status(400).json({ error: 'Preço inválido' });
+    }
+
+    const imagens = [];
+    if (req.files && req.files.length > 0) {
+      for (const file of req.files) {
+        const urlImagem = await uploadImagemGitHub(file.filename, file.path);
+        imagens.push(urlImagem);
+        await fs.unlink(file.path);
+      }
+    }
+
+    let produtos = [];
+    let sha;
+    try {
+      const response = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
+        owner: 'bingaby',
+        repo: 'centrodecompra',
+        path: 'produtos.json',
+      });
+      produtos = JSON.parse(Buffer.from(response.data.content, 'base64').toString());
+      sha = response.data.sha;
+    } catch (error) {
+      if (error.status !== 404) throw error;
+    }
+
+    const novoProduto = {
+      _id: `${Date.now()}${Math.random().toString(36).substr(2, 9)}`,
+      nome,
+      descricao,
+      categoria,
+      loja,
+      link,
+      preco: precoFloat,
+      imagens,
+    };
+
+    produtos.push(novoProduto);
+
+    const jsonContent = JSON.stringify(produtos, null, 2);
+
+    await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
+      owner: 'bingaby',
+      repo: 'centrodecompra',
+      path: 'produtos.json',
+      message: 'Adiciona novo produto via API',
+      content: Buffer.from(jsonContent).toString('base64'),
+      sha,
+      branch: 'main',
+    });
+
+    res.status(201).json({ message: 'Produto adicionado com sucesso', produto: novoProduto });
+  } catch (error) {
+    console.error('Erro ao adicionar produto:', error);
+    res.status(500).json({ error: error.message || 'Erro ao adicionar produto' });
+  }
 });
 
-app.put('/api/produtos/:id', authenticateToken, (req, res) => {
-  // Lógica para atualizar produto
-  res.json({ message: 'Produto atualizado' });
+// PUT produto
+app.put('/api/produtos/:id', upload.array('imagens', 3), async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { nome, descricao, categoria, loja, link, preco } = req.body;
+
+    if (!nome || !categoria || !loja || !link || !preco) {
+      return res.status(400).json({ error: 'Todos os campos são obrigatórios' });
+    }
+
+    const precoFloat = parseFloat(preco);
+    if (isNaN(precoFloat) || precoFloat < 0) {
+      return res.status(400).json({ error: 'Preço inválido' });
+    }
+
+    const response = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
+      owner: 'bingaby',
+      repo: 'centrodecompra',
+      path: 'produtos.json',
+    });
+
+    let produtos = JSON.parse(Buffer.from(response.data.content, 'base64').toString());
+    const sha = response.data.sha;
+
+    const produtoIndex = produtos.findIndex(p => p._id === id);
+    if (produtoIndex === -1) {
+      return res.status(404).json({ error: 'Produto não encontrado' });
+    }
+
+    const imagens = [];
+    if (req.files && req.files.length > 0) {
+      for (const file of req.files) {
+        const urlImagem = await uploadImagemGitHub(file.filename, file.path);
+        imagens.push(urlImagem);
+        await fs.unlink(file.path);
+      }
+    }
+
+    // Manter imagens existentes se nenhuma nova for enviada
+    const imagensAtualizadas = imagens.length > 0 ? imagens : produtos[produtoIndex].imagens;
+
+    // Deletar imagens antigas do GitHub se novas imagens foram enviadas
+    if (imagens.length > 0 && produtos[produtoIndex].imagens && produtos[produtoIndex].imagens.length > 0) {
+      for (const urlImagem of produtos[produtoIndex].imagens) {
+        const urlObj = new URL(urlImagem);
+        const caminhoArquivo = urlObj.pathname.split('/').slice(4).join('/');
+        await deletarArquivoGitHub(caminhoArquivo);
+      }
+    }
+
+    produtos[produtoIndex] = {
+      _id: id,
+      nome,
+      descricao,
+      categoria,
+      loja,
+      link,
+      preco: precoFloat,
+      imagens: imagensAtualizadas,
+    };
+
+    const jsonContent = JSON.stringify(produtos, null, 2);
+
+    await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
+      owner: 'bingaby',
+      repo: 'centrodecompra',
+      path: 'produtos.json',
+      message: `Atualiza produto ${id} via API`,
+      content: Buffer.from(jsonContent).toString('base64'),
+      sha,
+      branch: 'main',
+    });
+
+    res.json({ message: 'Produto atualizado com sucesso', produto: produtos[produtoIndex] });
+  } catch (error) {
+    console.error('Erro ao atualizar produto:', error);
+    res.status(500).json({ error: error.message || 'Erro ao atualizar produto' });
+  }
 });
 
-app.delete('/api/produtos/:id', authenticateToken, (req, res) => {
-  // Lógica para excluir produto
-  res.json({ message: 'Produto excluído' });
+// DELETE produto
+app.delete('/api/produtos/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+
+    const response = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
+      owner: 'bingaby',
+      repo: 'centrodecompra',
+      path: 'produtos.json',
+    });
+
+    const produtos = JSON.parse(Buffer.from(response.data.content, 'base64').toString());
+    const sha = response.data.sha;
+
+    const produtoIndex = produtos.findIndex(p => p._id === id);
+    if (produtoIndex === -1) {
+      return res.status(404).json({ error: 'Produto não encontrado' });
+    }
+
+    const produto = produtos[produtoIndex];
+    if (produto.imagens && produto.imagens.length > 0) {
+      for (const urlImagem of produto.imagens) {
+        const urlObj = new URL(urlImagem);
+        const caminhoArquivo = urlObj.pathname.split('/').slice(4).join('/');
+        await deletarArquivoGitHub(caminhoArquivo);
+      }
+    }
+
+    produtos.splice(produtoIndex, 1);
+
+    const jsonContent = JSON.stringify(produtos, null, 2);
+
+    await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
+      owner: 'bingaby',
+      repo: 'centrodecompra',
+      path: 'produtos.json',
+      message: `Remove produto ${id} via API`,
+      content: Buffer.from(jsonContent).toString('base64'),
+      sha,
+      branch: 'main',
+    });
+
+    res.json({ message: 'Produto excluído com sucesso' });
+  } catch (error) {
+    console.error('Erro ao excluir produto:', error);
+    res.status(500).json({ error: 'Erro ao excluir produto' });
+  }
 });
 
-// Iniciar o servidor
-const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
 });
