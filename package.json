@@ -1,17 +1,24 @@
 {
-  "name": "centrodecompra-backend",
+  "name": "centrodecompra-server",
   "version": "1.0.0",
   "main": "src/server.js",
+  "dependencies": {
+    "@capacitor/android": "^7.2.0",
+    "@capacitor/core": "^7.2.0",
+    "@octokit/core": "^7.0.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.5.0",
+    "express": "^5.1.0",
+    "firebase": "^11.9.1",
+    "jsonwebtoken": "^9.0.2",
+    "mercadopago": "^2.7.0",
+    "multer": "^2.0.1",
+    "open": "^10.1.2"
+  },
   "scripts": {
     "start": "node src/server.js"
   },
-  "dependencies": {
-    "express": "^4.17.1",
-    "cors": "^2.8.5",
-    "jsonwebtoken": "^9.0.0",
-    "multer": "^1.4.5-lts.1"
-  },
-  "engines": {
-    "node": "22.14.0"
+  "devDependencies": {
+    "@capacitor/cli": "^7.2.0"
   }
 }
