@@ -1,7 +1,7 @@
 {
   "name": "centrodecompra-server",
   "version": "1.0.0",
-  "main": "src/server.js",
+  "main": "server.js",
   "dependencies": {
     "@capacitor/android": "^7.2.0",
     "@capacitor/core": "^7.2.0",
@@ -16,7 +16,7 @@
     "open": "^10.1.2"
   },
   "scripts": {
-    "start": "node src/server.js"
+    "start": "node server.js"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.2.0"
