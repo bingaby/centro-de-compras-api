@@ -1,4 +1,3 @@
-// server.js
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs').promises;
@@ -41,8 +40,28 @@ fs.mkdir('upload', { recursive: true }).catch(console.error);
 // Endpoint para listar produtos
 app.get('/api/produtos', async (req, res) => {
   try {
-    const data = await fs.readFile('produtos.json', 'utf8');
-    res.json(JSON.parse(data));
+    let data;
+    try {
+      data = await fs.readFile('produtos.json', 'utf8');
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        await fs.writeFile('produtos.json', '[]', 'utf8');
+        data = '[]';
+      } else {
+        throw error;
+      }
+    }
+    const produtos = JSON.parse(data);
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const startIndex = (page - 1) * limit;
+    const paginatedProdutos = produtos.slice(startIndex, startIndex + limit);
+    res.json({
+      produtos: paginatedProdutos,
+      total: produtos.length,
+      page,
+      limit
+    });
   } catch (error) {
     console.error('Erro ao ler produtos.json:', error);
     res.status(500).json({ error: 'Erro ao carregar produtos' });
@@ -64,7 +83,15 @@ app.post('/api/produtos', upload.array('imagens', 3), async (req, res) => {
     }
 
     const imagens = req.files.map(file => `/upload/${file.filename}`);
-    const novoProduto = { nome, categoria, loja, link, preco: parseFloat(preco), imagens };
+    const novoProduto = {
+      _id: Date.now() + Math.random().toString(36).substring(2, 9),
+      nome,
+      categoria,
+      loja,
+      link,
+      preco: parseFloat(preco),
+      imagens
+    };
 
     let produtos = [];
     try {
@@ -72,7 +99,11 @@ app.post('/api/produtos', upload.array('imagens', 3), async (req, res) => {
       produtos = JSON.parse(data);
       if (!Array.isArray(produtos)) produtos = [];
     } catch (error) {
-      produtos = [];
+      if (error.code === 'ENOENT') {
+        produtos = [];
+      } else {
+        throw error;
+      }
     }
 
     produtos.push(novoProduto);
@@ -93,14 +124,17 @@ app.delete('/api/produtos/:index', async (req, res) => {
       const data = await fs.readFile('produtos.json', 'utf8');
       produtos = JSON.parse(data);
     } catch (error) {
-      produtos = [];
+      if (error.code === 'ENOENT') {
+        produtos = [];
+      } else {
+        throw error;
+      }
     }
 
     if (index < 0 || index >= produtos.length) {
       return res.status(400).json({ error: 'Índice inválido' });
     }
 
-    // Remover imagens associadas
     const imagens = produtos[index].imagens || [];
     for (const imagem of imagens) {
       const filePath = path.join(__dirname, imagem.replace('/upload/', 'upload/'));
