@@ -1,28 +1,55 @@
 const express = require('express');
 const cors = require('cors');
-const fs = require('fs').promises; // Usar fs.promises para async/await
+const fs = require('fs').promises; // Usar fs.promises para async/await (para exclusão de arquivos locais)
 const path = require('path');
 const multer = require('multer');
-const app = express();
+const admin = require('firebase-admin'); // Importa o SDK Admin do Firebase
+
+// --- Inicialização do Firebase Admin SDK ---
+// Carrega a chave da conta de serviço da variável de ambiente.
+// É mais seguro armazenar o conteúdo JSON como uma única string na variável de ambiente
+// e depois fazer o parse aqui.
+const serviceAccountString = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
+
+if (!serviceAccountString) {
+    console.error('ERRO: A variável de ambiente FIREBASE_SERVICE_ACCOUNT_KEY não está definida.');
+    console.error('Por favor, configure-a no Render com o conteúdo do seu arquivo JSON de credenciais do Firebase.');
+    process.exit(1); // Sai da aplicação se as credenciais não forem encontradas
+}
+
+try {
+    const serviceAccount = JSON.parse(serviceAccountString);
+    admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount)
+        // Se você precisar de acesso ao Realtime Database ou Storage, adicione databaseURL ou storageBucket aqui
+        // databaseURL: "https://<YOUR_PROJECT_ID>.firebaseio.com"
+    });
+    console.log('Firebase Admin SDK inicializado com sucesso.');
+} catch (error) {
+    console.error('ERRO: Falha ao inicializar Firebase Admin SDK. Verifique o formato da sua variável de ambiente FIREBASE_SERVICE_ACCOUNT_KEY.', error);
+    process.exit(1); // Sai da aplicação se a inicialização falhar
+}
+
+// Obtém uma referência para o Firestore
+const db = admin.firestore();
+const produtosCollection = db.collection('produtos'); // Referência à coleção 'produtos' no Firestore
 
 // --- Configurações do Servidor ---
+const app = express();
 app.use(cors()); // Permite requisições de diferentes origens (CORS)
 app.use(express.json()); // Habilita o parsing de JSON no corpo das requisições
-// Serve arquivos estáticos da pasta 'upload'
+// Serve arquivos estáticos da pasta 'upload' (para as imagens)
 app.use('/upload', express.static(path.join(__dirname, 'upload')));
 
 // --- Configuração do Multer para Upload de Imagens ---
 const storage = multer.diskStorage({
-    // Define o diretório onde os arquivos serão salvos
     destination: (req, file, cb) => {
-        cb(null, 'upload/');
+        cb(null, 'upload/'); // Salva temporariamente na pasta 'upload' do servidor
     },
-    // Define o nome do arquivo no disco
     filename: (req, file, cb) => {
         const timestamp = Date.now();
-        // Normaliza o nome do produto para ser parte do nome do arquivo
-        const nomeProduto = req.body.nome ? req.body.nome.replace(/\s+/g, '-').toLowerCase() : 'produto';
-        const ext = path.extname(file.originalname); // Pega a extensão original do arquivo
+        const nomeProduto = req.body.nome ? req.body.nome.replace(/\s+/g, '-').toLowerCase() : 'produto-sem-nome';
+        const ext = path.extname(file.originalname);
         cb(null, `produto_${nomeProduto}-${timestamp}${ext}`);
     }
 });
@@ -31,66 +58,31 @@ const upload = multer({
     storage,
     limits: { fileSize: 2 * 1024 * 1024 }, // Limite de tamanho do arquivo: 2MB
     fileFilter: (req, file, cb) => {
-        // Filtra para aceitar apenas arquivos de imagem
         if (file.mimetype.startsWith('image/')) {
-            cb(null, true); // Aceita o arquivo
+            cb(null, true);
         } else {
-            cb(new Error('Apenas imagens são permitidas!')); // Rejeita o arquivo
+            cb(new Error('Apenas imagens são permitidas!'));
         }
     }
 });
 
-// --- Criação da Pasta de Upload ---
-// Garante que a pasta 'upload' exista. Se não existir, a cria.
+// --- Criação da Pasta de Upload (ainda necessária para o Multer) ---
 fs.mkdir('upload', { recursive: true })
-    .then(() => console.log('Pasta "upload" verificada/criada com sucesso.'))
+    .then(() => console.log('Pasta "upload" verificada/criada com sucesso para uploads temporários.'))
     .catch(err => console.error('Erro ao criar pasta "upload":', err));
 
 // --- Endpoint para Listar Produtos ---
 app.get('/api/produtos', async (req, res) => {
     try {
+        // Busca todos os documentos da coleção 'produtos' no Firestore
+        const snapshot = await produtosCollection.get();
         let produtos = [];
-        let fileContent = '[]'; // Conteúdo padrão para o arquivo, caso esteja vazio ou não exista
+        snapshot.forEach(doc => {
+            // Adiciona o ID do documento do Firestore como _id para compatibilidade com o frontend
+            produtos.push({ _id: doc.id, ...doc.data() });
+        });
 
-        try {
-            fileContent = await fs.readFile('produtos.json', 'utf8');
-            // Se o arquivo estiver vazio ou contiver apenas espaços em branco,
-            // tratamos como um array JSON vazio para evitar erro de parse.
-            if (fileContent.trim() === '') {
-                fileContent = '[]';
-            }
-        } catch (error) {
-            // Se o arquivo não for encontrado (ENOENT), o criamos como um array vazio.
-            if (error.code === 'ENOENT') {
-                await fs.writeFile('produtos.json', '[]', 'utf8');
-                console.log('produtos.json não encontrado, criado como array vazio.');
-                fileContent = '[]'; // Garante que o conteúdo para parse seja um array vazio
-            } else {
-                // Outros erros de leitura de arquivo são propagados para o catch externo.
-                console.error('Erro ao ler produtos.json (fora de ENOENT):', error);
-                throw error;
-            }
-        }
-
-        try {
-            produtos = JSON.parse(fileContent);
-            // Garante que 'produtos' seja sempre um array, mesmo se o JSON for inválido
-            // ou se o arquivo contiver algo que não seja um array JSON.
-            if (!Array.isArray(produtos)) {
-                console.warn('produtos.json contém JSON inválido ou não é um array. Inicializando como array vazio.');
-                produtos = [];
-                // Opcionalmente, sobrescreve o arquivo com um array vazio para corrigir a corrupção
-                await fs.writeFile('produtos.json', '[]', 'utf8');
-            }
-        } catch (error) {
-            // Erro de parsing JSON (e.g., JSON malformado)
-            console.warn('produtos.json contém JSON malformado. Inicializando como array vazio.', error);
-            produtos = [];
-            // Sobrescreve o arquivo com um array vazio para corrigir a corrupção
-            await fs.writeFile('produtos.json', '[]', 'utf8');
-        }
-
-        // --- Lógica de Filtragem ---
+        // --- Lógica de Filtragem (aplicada aos dados do Firestore) ---
         let produtosFiltrados = produtos;
 
         const categoriaFiltro = req.query.categoria?.toLowerCase();
@@ -106,7 +98,7 @@ app.get('/api/produtos', async (req, res) => {
         if (termoBuscaFiltro) {
             produtosFiltrados = produtosFiltrados.filter(p =>
                 p.nome?.toLowerCase().includes(termoBuscaFiltro) ||
-                p.descricao?.toLowerCase().includes(termoBuscaFiltro) ||
+                p.descricao?.toLowerCase().includes(termoBuscaFiltro) || // Adicionado descrição ao filtro
                 p.categoria?.toLowerCase().includes(termoBuscaFiltro) ||
                 p.loja?.toLowerCase().includes(termoBuscaFiltro)
             );
@@ -129,8 +121,7 @@ app.get('/api/produtos', async (req, res) => {
         });
 
     } catch (error) {
-        // Captura qualquer erro que ocorra durante o processo e envia uma resposta 500
-        console.error('Erro fatal ao carregar produtos na API:', error);
+        console.error('Erro ao carregar produtos do Firestore:', error);
         res.status(500).json({ error: 'Erro interno do servidor ao carregar produtos.' });
     }
 });
@@ -138,118 +129,87 @@ app.get('/api/produtos', async (req, res) => {
 // --- Endpoint para Adicionar Produto ---
 app.post('/api/produtos', upload.array('imagens', 3), async (req, res) => {
     try {
-        const { nome, categoria, loja, link, preco } = req.body;
+        const { nome, categoria, loja, link, preco, descricao } = req.body; // Incluindo 'descricao'
 
         // Validação de campos obrigatórios
         if (!nome || !categoria || !loja || !link || !preco) {
-            return res.status(400).json({ error: 'Todos os campos são obrigatórios' });
+            // Retorna 400 Bad Request com uma mensagem clara
+            return res.status(400).json({ error: 'Todos os campos obrigatórios (nome, categoria, loja, link, preco) são necessários.' });
         }
         // Validação de preço
         if (parseFloat(preco) < 0) {
-            return res.status(400).json({ error: 'O preço deve ser positivo' });
+            return res.status(400).json({ error: 'O preço deve ser positivo.' });
         }
         // Validação de imagens
         if (!req.files || req.files.length === 0) {
-            return res.status(400).json({ error: 'Pelo menos uma imagem é necessária' });
+            return res.status(400).json({ error: 'Pelo menos uma imagem é necessária.' });
         }
 
-        // Mapeia os caminhos das imagens para URLs
+        // Mapeia os caminhos das imagens para URLs acessíveis publicamente
+        // Lembre-se: Imagens na pasta 'upload' do Render são efêmeras!
         const imagens = req.files.map(file => `/upload/${file.filename}`);
 
         // Cria o novo objeto de produto
         const novoProduto = {
-            _id: Date.now() + Math.random().toString(36).substring(2, 9), // ID único
             nome,
+            descricao: descricao || '', // Garante que a descrição exista, mesmo que vazia
             categoria,
             loja,
             link,
             preco: parseFloat(preco),
-            imagens
+            imagens,
+            createdAt: admin.firestore.FieldValue.serverTimestamp() // Adiciona um timestamp de criação
         };
 
-        let produtos = [];
-        try {
-            const data = await fs.readFile('produtos.json', 'utf8');
-            produtos = JSON.parse(data);
-            if (!Array.isArray(produtos)) {
-                console.warn('produtos.json não contém um array ao adicionar, inicializando como vazio');
-                produtos = [];
-            }
-        } catch (error) {
-            if (error.code === 'ENOENT') {
-                produtos = []; // Se o arquivo não existir, inicia com array vazio
-            } else {
-                throw error; // Outros erros de leitura são propagados
-            }
-        }
+        // Adiciona o novo produto à coleção 'produtos' no Firestore
+        const docRef = await produtosCollection.add(novoProduto);
 
-        produtos.push(novoProduto); // Adiciona o novo produto ao array
-        // Escreve o array atualizado de volta no arquivo JSON, formatado para legibilidade
-        await fs.writeFile('produtos.json', JSON.stringify(produtos, null, 2));
-
-        res.status(201).json({ message: 'Produto adicionado com sucesso', produto: novoProduto }); // 201 Created
+        // Retorna o produto adicionado com o ID gerado pelo Firestore
+        res.status(201).json({ message: 'Produto adicionado com sucesso', produto: { _id: docRef.id, ...novoProduto } });
     } catch (error) {
-        console.error('Erro ao adicionar produto:', error);
-        // Envia uma resposta de erro, incluindo a mensagem de erro se disponível
-        res.status(500).json({ error: error.message || 'Erro ao adicionar produto' });
+        console.error('Erro ao adicionar produto no Firestore:', error);
+        res.status(500).json({ error: error.message || 'Erro interno do servidor ao adicionar produto.' });
     }
 });
 
 // --- Endpoint para Excluir Produto ---
-app.delete('/api/produtos/:id', async (req, res) => { // Mudado de :index para :id para ser mais RESTful
+app.delete('/api/produtos/:id', async (req, res) => {
     try {
         const productId = req.params.id; // Pega o ID do produto da URL
 
-        let produtos = [];
-        try {
-            const data = await fs.readFile('produtos.json', 'utf8');
-            produtos = JSON.parse(data);
-            if (!Array.isArray(produtos)) {
-                console.warn('produtos.json não contém um array ao excluir, inicializando como vazio');
-                produtos = [];
-            }
-        } catch (error) {
-            if (error.code === 'ENOENT') {
-                produtos = [];
-            } else {
-                throw error;
-            }
+        // Busca o documento do produto no Firestore para obter os caminhos das imagens
+        const productDoc = await produtosCollection.doc(productId).get();
+
+        if (!productDoc.exists) {
+            return res.status(404).json({ error: 'Produto não encontrado para exclusão.' });
         }
 
-        // Encontra o índice do produto a ser excluído pelo _id
-        const produtoIndex = produtos.findIndex(p => p._id === productId);
+        const imagensParaExcluir = productDoc.data().imagens || [];
 
-        if (produtoIndex === -1) {
-            return res.status(404).json({ error: 'Produto não encontrado para exclusão' });
-        }
+        // Exclui o produto do Firestore
+        await produtosCollection.doc(productId).delete();
+        console.log(`Produto ${productId} excluído do Firestore.`);
 
-        const imagensParaExcluir = produtos[produtoIndex].imagens || [];
-
-        // Exclui as imagens associadas ao produto
+        // Tenta excluir as imagens associadas do disco local (ainda efêmero no Render)
         for (const imagemPath of imagensParaExcluir) {
-            // Constrói o caminho completo do arquivo no sistema de arquivos
             const filePath = path.join(__dirname, imagemPath.replace('/upload/', 'upload/'));
             try {
                 await fs.unlink(filePath); // Tenta excluir o arquivo
-                console.log(`Imagem excluída: ${filePath}`);
+                console.log(`Imagem excluída do disco: ${filePath}`);
             } catch (err) {
-                // Apenas um aviso se a imagem não for encontrada (já pode ter sido excluída)
-                console.warn(`Imagem ${filePath} não encontrada para exclusão ou erro ao excluir:`, err.message);
+                // Apenas um aviso se a imagem não for encontrada (já pode ter sido excluída ou não existia)
+                console.warn(`Aviso: Imagem ${filePath} não encontrada no disco ou erro ao excluir:`, err.message);
             }
         }
 
-        // Remove o produto do array
-        produtos.splice(produtoIndex, 1);
-        // Escreve o array atualizado de volta no arquivo JSON
-        await fs.writeFile('produtos.json', JSON.stringify(produtos, null, 2));
+        res.json({ message: 'Produto excluído com sucesso do Firestore e imagens do disco (se existiam).' });
 
-        res.json({ message: 'Produto excluído com sucesso' });
     } catch (error) {
-        console.error('Erro ao excluir produto:', error);
-        res.status(500).json({ error: 'Erro ao excluir produto' });
+        console.error('Erro ao excluir produto do Firestore:', error);
+        res.status(500).json({ error: 'Erro interno do servidor ao excluir produto.' });
     }
 });
 
 // --- Porta do Servidor ---
-const PORT = process.env.PORT || 3000; // Usa a porta do ambiente ou 3000 como padrão
+const PORT = process.env.PORT || 3000; // Usa a porta do ambiente (definida pelo Render) ou 3000 como padrão
 app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
