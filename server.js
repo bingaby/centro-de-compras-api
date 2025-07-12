@@ -1,10 +1,13 @@
 const express = require('express');
+const cors = require('cors');
 const path = require('path');
 const app = express();
 
 // Configurar CORS para permitir requisições do frontend
-const cors = require('cors');
 app.use(cors());
+
+// Configurar variáveis de ambiente
+require('dotenv').config();
 
 // Servir arquivos estáticos (ex.: favicon.ico, imagens)
 app.use(express.static(path.join(__dirname, 'public')));
@@ -12,8 +15,8 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Endpoint para produtos
 app.get('/api/produtos', (req, res) => {
   try {
-    // Ajuste o caminho para onde o JSON está no servidor
-    const produtos = require('./data/produtos.json'); // Certifique-se de que este arquivo existe
+    // Carregar o JSON dos produtos (ajuste o caminho conforme necessário)
+    const produtos = require('./data/produtos.json'); // Certifique-se de que data/produtos.json existe
     const { page = 1, limit = 24 } = req.query;
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
@@ -37,13 +40,18 @@ app.get('/api/produtos', (req, res) => {
   }
 });
 
-// Configurar favicon (para evitar erro 404)
+// Tratar erro 404 para favicon.ico
 app.get('/favicon.ico', (req, res) => {
   res.sendFile(path.join(__dirname, 'public/favicon.ico'), (err) => {
     if (err) {
-      res.status(404).send('Favicon não encontrado');
+      res.status(204).end(); // Retorna vazio se não encontrar o favicon
     }
   });
+});
+
+// Tratar rotas não encontradas
+app.use((req, res) => {
+  res.status(404).json({ error: 'Rota não encontrada' });
 });
 
 // Iniciar o servidor
