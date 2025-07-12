@@ -1,24 +1,53 @@
-{
-  "name": "centrodecompra-server",
-  "version": "1.0.0",
-  "main": "server.js",
-  "dependencies": {
-    "@capacitor/android": "^7.2.0",
-    "@capacitor/core": "^7.2.0",
-    "@octokit/core": "^7.0.2",
-    "cors": "^2.8.5",
-    "dotenv": "^16.5.0",
-    "express": "^5.1.0",
-    "firebase": "^11.9.1",
-    "jsonwebtoken": "^9.0.2",
-    "mercadopago": "^2.7.0",
-    "multer": "^2.0.1",
-    "open": "^10.1.2"
-  },
-  "scripts": {
-    "start": "node server.js"
-  },
-  "devDependencies": {
-    "@capacitor/cli": "^7.2.0"
+const express = require('express');
+const path = require('path');
+const app = express();
+
+// Configurar CORS para permitir requisições do frontend
+const cors = require('cors');
+app.use(cors());
+
+// Servir arquivos estáticos (ex.: favicon.ico, imagens)
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Endpoint para produtos
+app.get('/api/produtos', (req, res) => {
+  try {
+    // Ajuste o caminho para onde o JSON está no servidor
+    const produtos = require('./data/produtos.json'); // Certifique-se de que este arquivo existe
+    const { page = 1, limit = 24 } = req.query;
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+
+    // Validação dos parâmetros
+    if (isNaN(pageNum) || isNaN(limitNum) || pageNum < 1 || limitNum < 1) {
+      return res.status(400).json({ error: 'Parâmetros de página ou limite inválidos' });
+    }
+
+    const start = (pageNum - 1) * limitNum;
+    const end = start + limitNum;
+
+    // Retornar produtos paginados
+    res.json({
+      produtos: produtos.slice(start, end),
+      total: produtos.length
+    });
+  } catch (error) {
+    console.error('Erro ao carregar produtos:', error);
+    res.status(500).json({ error: 'Erro interno do servidor', details: error.message });
   }
-}
+});
+
+// Configurar favicon (para evitar erro 404)
+app.get('/favicon.ico', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public/favicon.ico'), (err) => {
+    if (err) {
+      res.status(404).send('Favicon não encontrado');
+    }
+  });
+});
+
+// Iniciar o servidor
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => {
+  console.log(`Servidor rodando na porta ${PORT}`);
+});
