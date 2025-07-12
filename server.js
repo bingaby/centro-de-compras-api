@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 const app = express();
 
 // Configurar CORS para permitir requisições do frontend
@@ -15,8 +16,15 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Endpoint para produtos
 app.get('/api/produtos', (req, res) => {
   try {
-    // Carregar o JSON dos produtos (ajuste o caminho conforme necessário)
-    const produtos = require('./data/produtos.json'); // Certifique-se de que data/produtos.json existe
+    // Carregar produtos.json da raiz do repositório
+    const produtosPath = path.join(__dirname, '..', 'produtos.json');
+    
+    // Verificar se o arquivo existe
+    if (!fs.existsSync(produtosPath)) {
+      throw new Error(`Arquivo produtos.json não encontrado em ${produtosPath}`);
+    }
+
+    const produtos = require(produtosPath);
     const { page = 1, limit = 24 } = req.query;
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
@@ -42,7 +50,8 @@ app.get('/api/produtos', (req, res) => {
 
 // Tratar erro 404 para favicon.ico
 app.get('/favicon.ico', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public/favicon.ico'), (err) => {
+  const faviconPath = path.join(__dirname, 'imagens', 'favicon.ico'); // Ajuste para usar a pasta imagens
+  res.sendFile(faviconPath, (err) => {
     if (err) {
       res.status(204).end(); // Retorna vazio se não encontrar o favicon
     }
