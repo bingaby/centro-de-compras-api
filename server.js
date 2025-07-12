@@ -17,7 +17,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.get('/api/produtos', (req, res) => {
   try {
     // Carregar produtos.json da raiz do repositório
-    const produtosPath = path.join(__dirname, '..', 'produtos.json');
+    const produtosPath = path.join(__dirname, 'produtos.json');
     
     // Verificar se o arquivo existe
     if (!fs.existsSync(produtosPath)) {
@@ -50,7 +50,7 @@ app.get('/api/produtos', (req, res) => {
 
 // Tratar erro 404 para favicon.ico
 app.get('/favicon.ico', (req, res) => {
-  const faviconPath = path.join(__dirname, 'imagens', 'favicon.ico'); // Ajuste para usar a pasta imagens
+  const faviconPath = path.join(__dirname, 'imagens', 'favicon.ico'); // Usar pasta imagens
   res.sendFile(faviconPath, (err) => {
     if (err) {
       res.status(204).end(); // Retorna vazio se não encontrar o favicon
