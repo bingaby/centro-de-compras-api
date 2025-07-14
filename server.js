@@ -16,18 +16,24 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Configurar Multer para upload de imagens
+// Configurar Multer para upload de imagens (salva temporariamente em Uploads)
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadDir = path.join(__dirname, 'uploads');
+    const uploadDir = path.join(__dirname, 'Uploads');
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });
+      fs.chmodSync(uploadDir, '755');
     }
     cb(null, uploadDir);
   },
   filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, uniqueSuffix + path.extname(file.originalname));
+    const cleanName = file.originalname
+      .replace(/\s+/g, '-')
+      .replace(/[^a-zA-Z0-9.-]/g, '')
+      .toLowerCase();
+    const finalName = `produto_${cleanName}${path.extname(file.originalname)}`;
+    console.log(`Gerando nome de arquivo: ${finalName}`);
+    cb(null, finalName);
   }
 });
 const upload = multer({
@@ -42,8 +48,13 @@ const upload = multer({
   limits: { fileSize: 2 * 1024 * 1024 } // Máximo 2MB por imagem
 });
 
-// Servir arquivos estáticos (imagens)
-app.use('/Uploads', express.static(path.join(__dirname, 'Uploads')));
+// Servir arquivos estáticos (imagens) da pasta Uploads
+app.use('/Uploads', express.static(path.join(__dirname, 'Uploads'), {
+  setHeaders: (res, filePath) => {
+    console.log(`Servindo arquivo: ${filePath}`);
+    res.setHeader('Cache-Control', 'public, max-age=31536000');
+  }
+}));
 
 // Função para gerar ID único
 function generateId() {
@@ -61,7 +72,6 @@ function isValidUrl(string) {
 }
 
 // Middleware para verificar autenticação
-// NOTA: O sistema de autenticação baseado em 'temp-token-' é frágil. Considere usar JWT (jsonwebtoken) ou OAuth para maior segurança.
 function checkAuth(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer temp-token-')) {
@@ -71,7 +81,7 @@ function checkAuth(req, res, next) {
   next();
 }
 
-// Middleware para logging de erros (pode ser integrado com Google Analytics via Google Cloud Logging ou universal-analytics)
+// Middleware para logging de erros
 function logError(error, req) {
   console.error(`❌ Erro [${req.method} ${req.url}]:`, {
     message: error.message,
@@ -80,11 +90,6 @@ function logError(error, req) {
     query: req.query,
     timestamp: new Date().toISOString()
   });
-  // Para Google Analytics, considere usar 'universal-analytics' ou Google Cloud Logging
-  // Exemplo com universal-analytics (descomente e configure com seu ID):
-  // const ua = require('universal-analytics');
-  // const visitor = ua('G-XXXXXXXXXX');
-  // visitor.event('Server Error', error.message, req.url, 1).send();
 }
 
 // Endpoint para upload de imagens
@@ -94,8 +99,8 @@ app.post('/api/upload', checkAuth, upload.array('imagens', 3), (req, res) => {
       return res.status(400).json({ error: 'Nenhuma imagem enviada' });
     }
     const urls = req.files.map(file => `/Uploads/${file.filename}`);
-    console.log('Imagens enviadas:', urls);
-    res.json({ urls });
+    console.log('Imagens enviadas para Uploads (mover manualmente para GitHub):', urls);
+    res.json({ urls, message: 'Imagens salvas em /Uploads. Faça upload manual para o GitHub (pasta imagens) e atualize o produtos.json com os URLs do GitHub.' });
   } catch (error) {
     logError(error, req);
     res.status(500).json({ error: 'Erro ao fazer upload de imagens', details: error.message });
@@ -113,7 +118,7 @@ app.get('/api/produtos', (req, res) => {
     }
     const produtos = JSON.parse(fs.readFileSync(produtosPath, 'utf-8'));
 
-    const { page = 1, limit = 25, categoria, loja } = req.query;
+    const { page = 1, limit = 8, categoria, loja } = req.query;
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
 
@@ -187,11 +192,9 @@ app.post('/api/produtos', checkAuth, upload.array('imagens', 3), (req, res) => {
     produtos.push(produto);
     fs.writeFileSync(produtosPath, JSON.stringify(produtos, null, 2), 'utf-8');
     console.log('Produto adicionado:', produto);
+    console.log('Aviso: Imagens salvas em /Uploads. Faça upload manual para o GitHub (pasta imagens) e atualize o produtos.json com os URLs do GitHub.');
 
-    // Log de evento para Google Analytics (opcional)
-    // Exemplo: visitor.event('Product', 'Add', produto.nome, 1).send();
-
-    res.status(201).json(produto);
+    res.status(201).json({ produto, message: 'Produto adicionado. Faça upload das imagens para o GitHub (pasta imagens) e atualize o produtos.json com os URLs do GitHub.' });
   } catch (error) {
     logError(error, req);
     res.status(500).json({ error: 'Erro ao adicionar produto', details: error.message });
@@ -234,10 +237,12 @@ app.put('/api/produtos/:id', checkAuth, upload.array('imagens', 3), (req, res) =
     if (req.files.length > 0) {
       const imagensAntigas = produtos[produtoIndex].imagens || [];
       imagensAntigas.forEach(img => {
-        const imgPath = path.join(__dirname, img.replace('/Uploads/', 'Uploads/'));
-        if (fs.existsSync(imgPath)) {
-          fs.unlinkSync(imgPath);
-          console.log('Imagem antiga removida:', imgPath);
+        if (img.startsWith('/Uploads/')) {
+          const imgPath = path.join(__dirname, img.replace('/Uploads/', 'Uploads/'));
+          if (fs.existsSync(imgPath)) {
+            fs.unlinkSync(imgPath);
+            console.log('Imagem antiga removida:', imgPath);
+          }
         }
       });
     }
@@ -261,11 +266,9 @@ app.put('/api/produtos/:id', checkAuth, upload.array('imagens', 3), (req, res) =
     produtos[produtoIndex] = updatedProduto;
     fs.writeFileSync(produtosPath, JSON.stringify(produtos, null, 2), 'utf-8');
     console.log('Produto atualizado:', updatedProduto);
+    console.log('Aviso: Imagens salvas em /Uploads. Faça upload manual para o GitHub (pasta imagens) e atualize o produtos.json com os URLs do GitHub.');
 
-    // Log de evento para Google Analytics (opcional)
-    // Exemplo: visitor.event('Product', 'Update', updatedProduto.nome, 1).send();
-
-    res.json(updatedProduto);
+    res.json({ produto: updatedProduto, message: 'Produto atualizado. Faça upload das imagens para o GitHub (pasta imagens) e atualize o produtos.json com os URLs do GitHub.' });
   } catch (error) {
     logError(error, req);
     res.status(500).json({ error: 'Erro ao atualizar produto', details: error.message });
@@ -287,22 +290,21 @@ app.delete('/api/produtos/:id', checkAuth, (req, res) => {
       return res.status(404).json({ error: 'Produto não encontrado' });
     }
 
-    // Remover imagens associadas
+    // Remover imagens associadas (apenas da pasta Uploads)
     const imagens = produtos[produtoIndex].imagens || [];
     imagens.forEach(img => {
-      const imgPath = path.join(__dirname, img.replace('/Uploads/', 'Uploads/'));
-      if (fs.existsSync(imgPath)) {
-        fs.unlinkSync(imgPath);
-        console.log('Imagem removida:', imgPath);
+      if (img.startsWith('/Uploads/')) {
+        const imgPath = path.join(__dirname, img.replace('/Uploads/', 'Uploads/'));
+        if (fs.existsSync(imgPath)) {
+          fs.unlinkSync(imgPath);
+          console.log('Imagem removida:', imgPath);
+        }
       }
     });
 
     const deletedProduto = produtos.splice(produtoIndex, 1)[0];
     fs.writeFileSync(produtosPath, JSON.stringify(produtos, null, 2), 'utf-8');
     console.log('Produto excluído:', deletedProduto);
-
-    // Log de evento para Google Analytics (opcional)
-    // Exemplo: visitor.event('Product', 'Delete', deletedProduto.nome, 1).send();
 
     res.json({ message: 'Produto excluído com sucesso' });
   } catch (error) {
@@ -329,6 +331,7 @@ app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
   console.log(`Diretório de uploads: ${path.join(__dirname, 'Uploads')}`);
   console.log(`Diretório de produtos: ${path.join(__dirname, 'produtos.json')}`);
+  console.log('Aviso: Imagens são salvas em /Uploads. Faça upload manual para o GitHub (pasta imagens) e atualize o produtos.json com os URLs do GitHub.');
 });
 
 // Manipulador de erros não capturados
@@ -338,6 +341,4 @@ process.on('uncaughtException', (err) => {
     stack: err.stack,
     timestamp: new Date().toISOString()
   });
-  // Opcional: Enviar erro para Google Analytics
-  // visitor.exception(err.message, true).send();
 });
