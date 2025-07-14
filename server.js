@@ -2,25 +2,66 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const multer = require('multer');
 const app = express();
 
 // Configurar CORS
 app.use(cors());
 
-// Configurar parsing de JSON e FormData
+// Configurar parsing de JSON
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Configurar variáveis de ambiente
 require('dotenv').config();
 
+// Configurar Multer para upload de arquivos
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadDir = path.join(__dirname, 'uploads');
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir);
+    }
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, uniqueSuffix + path.extname(file.originalname));
+  }
+});
+const upload = multer({
+  storage: storage,
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Apenas imagens são permitidas!'), false);
+    }
+  }
+});
+
 // Servir arquivos estáticos
 app.use(express.static(path.join(__dirname, 'public')));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Função para gerar um ID único
 function generateId() {
   return Date.now().toString() + Math.random().toString(36).substr(2, 9);
 }
+
+// Endpoint para upload de imagens
+app.post('/api/upload', upload.array('imagens', 10), (req, res) => {
+  try {
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ error: 'Nenhuma imagem enviada' });
+    }
+    const urls = req.files.map(file => `${req.protocol}://${req.get('host')}/uploads/${file.filename}`);
+    res.json({ urls });
+  } catch (error) {
+    console.error('❌ Erro ao fazer upload de imagens:', error.message);
+    res.status(500).json({ error: 'Erro ao fazer upload de imagens', details: error.message });
+  }
+});
 
 // Endpoint para listar produtos
 app.get('/api/produtos', (req, res) => {
