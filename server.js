@@ -79,7 +79,7 @@ app.post('/api/upload', checkAuth, upload.array('imagens', 3), async (req, res) 
   }
 });
 
-// Endpoint para listar produtos
+// Endpoint para listar produtos (sem autenticação para página principal)
 app.get('/api/produtos', async (req, res) => {
   try {
     const produtosPath = path.join(__dirname, 'produtos.json');
