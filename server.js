@@ -3,31 +3,20 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
-const cloudinary = require('cloudinary').v2;
 const app = express();
 
 // Configurar CORS
 app.use(cors({
   origin: ['https://seu-site.netlify.app', 'http://localhost:3000'],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type']
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 // Configurar parsing de JSON
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Configurar variáveis de ambiente
-require('dotenv').config();
-
-// Configurar Cloudinary
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET
-});
-
-// Configurar Multer para upload temporário
+// Configurar Multer para upload de imagens
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const uploadDir = path.join(__dirname, 'uploads');
@@ -49,30 +38,25 @@ const upload = multer({
     } else {
       cb(new Error('Apenas imagens são permitidas!'), false);
     }
-  }
+  },
+  limits: { fileSize: 2 * 1024 * 1024 } // Máximo 2MB por imagem
 });
 
-// Servir arquivos estáticos
-app.use(express.static(path.join(__dirname, 'public')));
+// Servir arquivos estáticos (imagens)
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// Função para gerar um ID único
+// Função para gerar ID único
 function generateId() {
   return Date.now().toString() + Math.random().toString(36).substr(2, 9);
 }
 
 // Endpoint para upload de imagens
-app.post('/api/upload', upload.array('imagens', 3), async (req, res) => {
+app.post('/api/upload', upload.array('imagens', 3), (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: 'Nenhuma imagem enviada' });
     }
-    const uploadPromises = req.files.map(file =>
-      cloudinary.uploader.upload(file.path, {
-        folder: 'centrodecompra'
-      }).then(result => result.secure_url)
-    );
-    const urls = await Promise.all(uploadPromises);
-    req.files.forEach(file => fs.unlinkSync(file.path)); // Deletar arquivos temporários
+    const urls = req.files.map(file => `/uploads/${file.filename}`);
     res.json({ urls });
   } catch (error) {
     console.error('❌ Erro ao fazer upload de imagens:', error.message);
@@ -88,8 +72,7 @@ app.get('/api/produtos', (req, res) => {
       fs.writeFileSync(produtosPath, '[]', 'utf-8');
       return res.json({ produtos: [], total: 0 });
     }
-    const fileData = fs.readFileSync(produtosPath, 'utf-8');
-    const produtos = JSON.parse(fileData);
+    const produtos = JSON.parse(fs.readFileSync(produtosPath, 'utf-8'));
 
     const { page = 1, limit = 25, categoria, loja } = req.query;
     const pageNum = parseInt(page);
@@ -121,7 +104,7 @@ app.get('/api/produtos', (req, res) => {
 });
 
 // Endpoint para adicionar produto
-app.post('/api/produtos', (req, res) => {
+app.post('/api/produtos', upload.array('imagens', 3), (req, res) => {
   try {
     const produtosPath = path.join(__dirname, 'produtos.json');
     if (!fs.existsSync(produtosPath)) {
@@ -129,18 +112,21 @@ app.post('/api/produtos', (req, res) => {
     }
     const produtos = JSON.parse(fs.readFileSync(produtosPath, 'utf-8'));
 
-    const { nome, categoria, loja, link, imagens } = req.body;
-    if (!nome || !categoria || !loja || !link) {
+    const { nome, descricao, categoria, loja, link, preco } = req.body;
+    if (!nome || !descricao || !categoria || !loja || !link || !preco) {
       return res.status(400).json({ error: 'Todos os campos obrigatórios devem ser preenchidos' });
     }
 
+    const imagens = req.files ? req.files.map(file => `/uploads/${file.filename}`) : [];
     const novoProduto = {
       _id: generateId(),
       nome,
+      descricao,
       categoria,
       loja,
       link,
-      imagens: Array.isArray(imagens) ? imagens : (imagens ? [imagens] : [])
+      preco: parseFloat(preco),
+      imagens
     };
 
     produtos.push(novoProduto);
@@ -154,7 +140,7 @@ app.post('/api/produtos', (req, res) => {
 });
 
 // Endpoint para atualizar produto
-app.put('/api/produtos/:id', (req, res) => {
+app.put('/api/produtos/:id', upload.array('imagens', 3), (req, res) => {
   try {
     const produtosPath = path.join(__dirname, 'produtos.json');
     if (!fs.existsSync(produtosPath)) {
@@ -168,18 +154,21 @@ app.put('/api/produtos/:id', (req, res) => {
       return res.status(404).json({ error: 'Produto não encontrado' });
     }
 
-    const { nome, categoria, loja, link, imagens } = req.body;
-    if (!nome || !categoria || !loja || !link) {
+    const { nome, descricao, categoria, loja, link, preco } = req.body;
+    if (!nome || !descricao || !categoria || !loja || !link || !preco) {
       return res.status(400).json({ error: 'Todos os campos obrigatórios devem ser preenchidos' });
     }
 
+    const imagens = req.files ? req.files.map(file => `/uploads/${file.filename}`) : produtos[index].imagens;
     produtos[index] = {
       _id: produtoId,
       nome,
+      descricao,
       categoria,
       loja,
       link,
-      imagens: Array.isArray(imagens) ? imagens : (imagens ? [imagens] : [])
+      preco: parseFloat(preco),
+      imagens
     };
 
     fs.writeFileSync(produtosPath, JSON.stringify(produtos, null, 2), 'utf-8');
