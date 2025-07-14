@@ -1,14 +1,14 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const fs = require('fs').promises;
+const fs = require('fs');
 const multer = require('multer');
 const app = express();
 
 // Configurar CORS para permitir requisições do frontend
 app.use(cors({
-  origin: ['https://www.centrodecompra.com.br', 'http://localhost:3000'],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  origin: ['https://www.centrodecompra.com.br', 'http://localhost:3000'], // Inclua localhost para testes locais
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
@@ -18,14 +18,12 @@ app.use(express.urlencoded({ extended: true }));
 
 // Configurar Multer para upload de imagens
 const storage = multer.diskStorage({
-  destination: async (req, file, cb) => {
-    const uploadDir = path.join(__dirname, 'Uploads');
-    try {
-      await fs.mkdir(uploadDir, { recursive: true });
-      cb(null, uploadDir);
-    } catch (error) {
-      cb(error);
+  destination: (req, file, cb) => {
+    const uploadDir = path.join(__dirname, 'uploads');
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir);
     }
+    cb(null, uploadDir);
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -44,19 +42,15 @@ const upload = multer({
   limits: { fileSize: 2 * 1024 * 1024 } // Máximo 2MB por imagem
 });
 
-// Servir arquivos estáticos (imagens) com cache
-app.use('/uploads', express.static(path.join(__dirname, 'Uploads'), {
-  setHeaders: (res) => {
-    res.set('Cache-Control', 'public, max-age=31536000');
-  }
-}));
+// Servir arquivos estáticos (imagens)
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Função para gerar ID único
 function generateId() {
   return Date.now().toString() + Math.random().toString(36).substr(2, 9);
 }
 
-// Middleware para verificar autenticação
+// Middleware para verificar autenticação (opcional, se necessário)
 function checkAuth(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer temp-token-')) {
@@ -66,7 +60,7 @@ function checkAuth(req, res, next) {
 }
 
 // Endpoint para upload de imagens
-app.post('/api/upload', checkAuth, upload.array('imagens', 3), async (req, res) => {
+app.post('/api/upload', checkAuth, upload.array('imagens', 3), (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: 'Nenhuma imagem enviada' });
@@ -79,24 +73,17 @@ app.post('/api/upload', checkAuth, upload.array('imagens', 3), async (req, res) 
   }
 });
 
-// Endpoint para listar produtos (sem autenticação para página principal)
-app.get('/api/produtos', async (req, res) => {
+// Endpoint para listar produtos
+app.get('/api/produtos', (req, res) => {
   try {
     const produtosPath = path.join(__dirname, 'produtos.json');
-    let produtos;
-    try {
-      const data = await fs.readFile(produtosPath, 'utf-8');
-      produtos = JSON.parse(data || '[]');
-    } catch (error) {
-      if (error.code === 'ENOENT') {
-        await fs.writeFile(produtosPath, '[]', 'utf-8');
-        produtos = [];
-      } else {
-        throw error;
-      }
+    if (!fs.existsSync(produtosPath)) {
+      fs.writeFileSync(produtosPath, '[]', 'utf-8');
+      return res.json({ produtos: [], total: 0 });
     }
+    const produtos = JSON.parse(fs.readFileSync(produtosPath, 'utf-8'));
 
-    const { page = 1, limit = 10, categoria, loja } = req.query;
+    const { page = 1, limit = 25, categoria, loja } = req.query;
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
 
@@ -126,31 +113,20 @@ app.get('/api/produtos', async (req, res) => {
 });
 
 // Endpoint para adicionar produto
-app.post('/api/produtos', checkAuth, upload.array('imagens', 3), async (req, res) => {
+app.post('/api/produtos', checkAuth, upload.array('imagens', 3), (req, res) => {
   try {
     const produtosPath = path.join(__dirname, 'produtos.json');
-    let produtos;
-    try {
-      const data = await fs.readFile(produtosPath, 'utf-8');
-      produtos = JSON.parse(data || '[]');
-    } catch (error) {
-      if (error.code === 'ENOENT') {
-        await fs.writeFile(produtosPath, '[]', 'utf-8');
-        produtos = [];
-      } else {
-        throw error;
-      }
+    if (!fs.existsSync(produtosPath)) {
+      fs.writeFileSync(produtosPath, '[]', 'utf-8');
     }
+    const produtos = JSON.parse(fs.readFileSync(produtosPath, 'utf-8'));
 
     const { nome, descricao, categoria, loja, link, preco } = req.body;
     if (!nome || !descricao || !categoria || !loja || !link || !preco) {
       return res.status(400).json({ error: 'Todos os campos obrigatórios devem ser preenchidos' });
     }
 
-    const imagens = req.files && req.files.length > 0
-      ? req.files.map(file => `/uploads/${file.filename}`)
-      : [];
-
+    const imagens = req.files ? req.files.map(file => `/uploads/${file.filename}`) : [];
     const novoProduto = {
       _id: generateId(),
       nome,
@@ -163,7 +139,8 @@ app.post('/api/produtos', checkAuth, upload.array('imagens', 3), async (req, res
     };
 
     produtos.push(novoProduto);
-    await fs.writeFile(produtosPath, JSON.stringify(produtos, null, 2), 'utf-8');
+    fs.writeFileSync(produtosPath, JSON.stringify(produtos, null, 2), 'utf-8');
+
     res.status(201).json({ message: 'Produto adicionado com sucesso', produto: novoProduto });
   } catch (error) {
     console.error('❌ Erro ao adicionar produto:', error.message);
@@ -172,37 +149,27 @@ app.post('/api/produtos', checkAuth, upload.array('imagens', 3), async (req, res
 });
 
 // Endpoint para atualizar produto
-app.put('/api/produtos/:id', checkAuth, async (req, res) => {
+app.put('/api/produtos/:id', checkAuth, upload.array('imagens', 3), (req, res) => {
   try {
     const produtosPath = path.join(__dirname, 'produtos.json');
-    let produtos;
-    try {
-      const data = await fs.readFile(produtosPath, 'utf-8');
-      produtos = JSON.parse(data || '[]');
-    } catch (error) {
-      if (error.code === 'ENOENT') {
-        throw new Error(`Arquivo produtos.json não encontrado em ${produtosPath}`);
-      }
-      throw error;
+    if (!fs.existsSync(produtosPath)) {
+      throw new Error(`Arquivo produtos.json não encontrado em ${produtosPath}`);
     }
-
+    const produtos = JSON.parse(fs.readFileSync(produtosPath, 'utf-8'));
     const produtoId = req.params.id;
+
     const index = produtos.findIndex(p => p._id === produtoId);
     if (index === -1) {
       return res.status(404).json({ error: 'Produto não encontrado' });
     }
 
-    const { nome, descricao, categoria, loja, link, preco, imagens } = req.body;
+    const { nome, descricao, categoria, loja, link, preco } = req.body;
     if (!nome || !descricao || !categoria || !loja || !link || !preco) {
       return res.status(400).json({ error: 'Todos os campos obrigatórios devem ser preenchidos' });
     }
 
-    let updatedImagens = produtos[index].imagens;
-    if (Array.isArray(imagens) && imagens.every(img => typeof img === 'string' && img.startsWith('/uploads/'))) {
-      updatedImagens = imagens;
-    }
-
-    const updatedProduto = {
+    const imagens = req.files && req.files.length > 0 ? req.files.map(file => `/uploads/${file.filename}`) : produtos[index].imagens;
+    produtos[index] = {
       _id: produtoId,
       nome,
       descricao,
@@ -210,12 +177,11 @@ app.put('/api/produtos/:id', checkAuth, async (req, res) => {
       loja,
       link,
       preco: parseFloat(preco),
-      imagens: updatedImagens
+      imagens
     };
 
-    produtos[index] = updatedProduto;
-    await fs.writeFile(produtosPath, JSON.stringify(produtos, null, 2), 'utf-8');
-    res.json({ message: 'Produto atualizado com sucesso', produto: updatedProduto });
+    fs.writeFileSync(produtosPath, JSON.stringify(produtos, null, 2), 'utf-8');
+    res.json({ message: 'Produto atualizado com sucesso', produto: produtos[index] });
   } catch (error) {
     console.error('❌ Erro ao atualizar produto:', error.message);
     res.status(500).json({ error: 'Erro interno do servidor', details: error.message });
@@ -223,28 +189,22 @@ app.put('/api/produtos/:id', checkAuth, async (req, res) => {
 });
 
 // Endpoint para excluir produto
-app.delete('/api/produtos/:id', checkAuth, async (req, res) => {
+app.delete('/api/produtos/:id', checkAuth, (req, res) => {
   try {
     const produtosPath = path.join(__dirname, 'produtos.json');
-    let produtos;
-    try {
-      const data = await fs.readFile(produtosPath, 'utf-8');
-      produtos = JSON.parse(data || '[]');
-    } catch (error) {
-      if (error.code === 'ENOENT') {
-        throw new Error(`Arquivo produtos.json não encontrado em ${produtosPath}`);
-      }
-      throw error;
+    if (!fs.existsSync(produtosPath)) {
+      throw new Error(`Arquivo produtos.json não encontrado em ${produtosPath}`);
     }
-
+    const produtos = JSON.parse(fs.readFileSync(produtosPath, 'utf-8'));
     const produtoId = req.params.id;
+
     const index = produtos.findIndex(p => p._id === produtoId);
     if (index === -1) {
       return res.status(404).json({ error: 'Produto não encontrado' });
     }
 
     produtos.splice(index, 1);
-    await fs.writeFile(produtosPath, JSON.stringify(produtos, null, 2), 'utf-8');
+    fs.writeFileSync(produtosPath, JSON.stringify(produtos, null, 2), 'utf-8');
     res.json({ message: 'Produto excluído com sucesso' });
   } catch (error) {
     console.error('❌ Erro ao excluir produto:', error.message);
@@ -253,13 +213,42 @@ app.delete('/api/produtos/:id', checkAuth, async (req, res) => {
 });
 
 // Endpoint para obter um produto específico
-app.get('/api/produtos/:id', checkAuth, async (req, res) => {
+app.get('/api/produtos/:id', checkAuth, (req, res) => {
   try {
     const produtosPath = path.join(__dirname, 'produtos.json');
-    let produtos;
-    try {
-      const data = await fs.readFile(produtosPath, 'utf-8');
-      produtos = JSON.parse(data || '[]');
-    } catch (error) {
-      if (error.code === 'ENOENT') {
-        throw new Error(`
+    if (!fs.existsSync(produtosPath)) {
+      throw new Error(`Arquivo produtos.json não encontrado em ${produtosPath}`);
+    }
+    const produtos = JSON.parse(fs.readFileSync(produtosPath, 'utf-8'));
+    const produtoId = req.params.id;
+
+    const produto = produtos.find(p => p._id === produtoId);
+    if (!produto) {
+      return res.status(404).json({ error: 'Produto não encontrado' });
+    }
+
+    res.json(produto);
+  } catch (error) {
+    console.error('❌ Erro ao obter produto:', error.message);
+    res.status(500).json({ error: 'Erro interno do servidor', details: error.message });
+  }
+});
+
+// Rota para favicon
+app.get('/favicon.ico', (req, res) => {
+  const faviconPath = path.join(__dirname, 'imagens', 'favicon.ico');
+  res.sendFile(faviconPath, (err) => {
+    if (err) res.status(204).end();
+  });
+});
+
+// Rota 404 padrão
+app.use((req, res) => {
+  res.status(404).json({ error: 'Rota não encontrada' });
+});
+
+// Iniciar servidor
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => {
+  console.log(`🚀 Servidor rodando na porta ${PORT}`);
+});
