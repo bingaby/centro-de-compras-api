@@ -262,39 +262,4 @@ app.get('/api/produtos/:id', checkAuth, async (req, res) => {
       produtos = JSON.parse(data || '[]');
     } catch (error) {
       if (error.code === 'ENOENT') {
-        throw new Error(`Arquivo produtos.json não encontrado em ${produtosPath}`);
-      }
-      throw error;
-    }
-
-    const produtoId = req.params.id;
-    const produto = produtos.find(p => p._id === produtoId);
-    if (!produto) {
-      return res.status(404).json({ error: 'Produto não encontrado' });
-    }
-
-    res.json(produto);
-  } catch (error) {
-    console.error('❌ Erro ao obter produto:', error.message);
-    res.status(500).json({ error: 'Erro interno do servidor', details: error.message });
-  }
-});
-
-// Rota para favicon
-app.get('/favicon.ico', (req, res) => {
-  const faviconPath = path.join(__dirname, 'imagens', 'favicon.ico');
-  res.sendFile(faviconPath, (err) => {
-    if (err) res.status(204).end();
-  });
-});
-
-// Rota 404 padrão
-app.use((req, res) => {
-  res.status(404).json({ error: 'Rota não encontrada' });
-});
-
-// Iniciar servidor
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
-  console.log(`🚀 Servidor rodando na porta ${PORT}`);
-});
+        throw new Error(`
