@@ -5,9 +5,9 @@ const fs = require('fs');
 const multer = require('multer');
 const app = express();
 
-// Configurar CORS
+// Configurar CORS para permitir requisições do frontend
 app.use(cors({
-  origin: ['https://seu-site.netlify.app', 'http://localhost:3000'],
+  origin: ['https://www.centrodecompra.com.br', 'http://localhost:3000'], // Inclua localhost para testes locais
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
@@ -50,8 +50,17 @@ function generateId() {
   return Date.now().toString() + Math.random().toString(36).substr(2, 9);
 }
 
+// Middleware para verificar autenticação (opcional, se necessário)
+function checkAuth(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer temp-token-')) {
+    return res.status(401).json({ error: 'Acesso não autorizado' });
+  }
+  next();
+}
+
 // Endpoint para upload de imagens
-app.post('/api/upload', upload.array('imagens', 3), (req, res) => {
+app.post('/api/upload', checkAuth, upload.array('imagens', 3), (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: 'Nenhuma imagem enviada' });
@@ -104,7 +113,7 @@ app.get('/api/produtos', (req, res) => {
 });
 
 // Endpoint para adicionar produto
-app.post('/api/produtos', upload.array('imagens', 3), (req, res) => {
+app.post('/api/produtos', checkAuth, upload.array('imagens', 3), (req, res) => {
   try {
     const produtosPath = path.join(__dirname, 'produtos.json');
     if (!fs.existsSync(produtosPath)) {
@@ -140,7 +149,7 @@ app.post('/api/produtos', upload.array('imagens', 3), (req, res) => {
 });
 
 // Endpoint para atualizar produto
-app.put('/api/produtos/:id', upload.array('imagens', 3), (req, res) => {
+app.put('/api/produtos/:id', checkAuth, upload.array('imagens', 3), (req, res) => {
   try {
     const produtosPath = path.join(__dirname, 'produtos.json');
     if (!fs.existsSync(produtosPath)) {
@@ -159,7 +168,7 @@ app.put('/api/produtos/:id', upload.array('imagens', 3), (req, res) => {
       return res.status(400).json({ error: 'Todos os campos obrigatórios devem ser preenchidos' });
     }
 
-    const imagens = req.files ? req.files.map(file => `/uploads/${file.filename}`) : produtos[index].imagens;
+    const imagens = req.files && req.files.length > 0 ? req.files.map(file => `/uploads/${file.filename}`) : produtos[index].imagens;
     produtos[index] = {
       _id: produtoId,
       nome,
@@ -180,7 +189,7 @@ app.put('/api/produtos/:id', upload.array('imagens', 3), (req, res) => {
 });
 
 // Endpoint para excluir produto
-app.delete('/api/produtos/:id', (req, res) => {
+app.delete('/api/produtos/:id', checkAuth, (req, res) => {
   try {
     const produtosPath = path.join(__dirname, 'produtos.json');
     if (!fs.existsSync(produtosPath)) {
@@ -204,7 +213,7 @@ app.delete('/api/produtos/:id', (req, res) => {
 });
 
 // Endpoint para obter um produto específico
-app.get('/api/produtos/:id', (req, res) => {
+app.get('/api/produtos/:id', checkAuth, (req, res) => {
   try {
     const produtosPath = path.join(__dirname, 'produtos.json');
     if (!fs.existsSync(produtosPath)) {
