@@ -3,10 +3,15 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
+const cloudinary = require('cloudinary').v2;
 const app = express();
 
 // Configurar CORS
-app.use(cors());
+app.use(cors({
+  origin: ['https://seu-site.netlify.app', 'http://localhost:3000'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type']
+}));
 
 // Configurar parsing de JSON
 app.use(express.json());
@@ -15,7 +20,14 @@ app.use(express.urlencoded({ extended: true }));
 // Configurar variáveis de ambiente
 require('dotenv').config();
 
-// Configurar Multer para upload de arquivos
+// Configurar Cloudinary
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
+
+// Configurar Multer para upload temporário
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const uploadDir = path.join(__dirname, 'uploads');
@@ -42,7 +54,6 @@ const upload = multer({
 
 // Servir arquivos estáticos
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Função para gerar um ID único
 function generateId() {
@@ -50,12 +61,18 @@ function generateId() {
 }
 
 // Endpoint para upload de imagens
-app.post('/api/upload', upload.array('imagens', 10), (req, res) => {
+app.post('/api/upload', upload.array('imagens', 3), async (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: 'Nenhuma imagem enviada' });
     }
-    const urls = req.files.map(file => `${req.protocol}://${req.get('host')}/uploads/${file.filename}`);
+    const uploadPromises = req.files.map(file =>
+      cloudinary.uploader.upload(file.path, {
+        folder: 'centrodecompra'
+      }).then(result => result.secure_url)
+    );
+    const urls = await Promise.all(uploadPromises);
+    req.files.forEach(file => fs.unlinkSync(file.path)); // Deletar arquivos temporários
     res.json({ urls });
   } catch (error) {
     console.error('❌ Erro ao fazer upload de imagens:', error.message);
@@ -112,19 +129,17 @@ app.post('/api/produtos', (req, res) => {
     }
     const produtos = JSON.parse(fs.readFileSync(produtosPath, 'utf-8'));
 
-    const { nome, descricao, categoria, loja, link, preco, imagens } = req.body;
-    if (!nome || !descricao || !categoria || !loja || !link || !preco) {
+    const { nome, categoria, loja, link, imagens } = req.body;
+    if (!nome || !categoria || !loja || !link) {
       return res.status(400).json({ error: 'Todos os campos obrigatórios devem ser preenchidos' });
     }
 
     const novoProduto = {
       _id: generateId(),
       nome,
-      descricao,
       categoria,
       loja,
       link,
-      preco: parseFloat(preco),
       imagens: Array.isArray(imagens) ? imagens : (imagens ? [imagens] : [])
     };
 
@@ -153,19 +168,17 @@ app.put('/api/produtos/:id', (req, res) => {
       return res.status(404).json({ error: 'Produto não encontrado' });
     }
 
-    const { nome, descricao, categoria, loja, link, preco, imagens } = req.body;
-    if (!nome || !descricao || !categoria || !loja || !link || !preco) {
+    const { nome, categoria, loja, link, imagens } = req.body;
+    if (!nome || !categoria || !loja || !link) {
       return res.status(400).json({ error: 'Todos os campos obrigatórios devem ser preenchidos' });
     }
 
     produtos[index] = {
       _id: produtoId,
       nome,
-      descricao,
       categoria,
       loja,
       link,
-      preco: parseFloat(preco),
       imagens: Array.isArray(imagens) ? imagens : (imagens ? [imagens] : [])
     };
 
