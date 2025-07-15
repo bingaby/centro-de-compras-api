@@ -5,18 +5,15 @@ const fs = require('fs');
 const multer = require('multer');
 const app = express();
 
-// Configurar CORS para permitir requisições do frontend
 app.use(cors({
   origin: ['https://www.centrodecompra.com.br', 'http://localhost:3000'],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// Configurar parsing de JSON e formulários
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Configurar Multer para upload de imagens (salva temporariamente em Uploads)
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const uploadDir = path.join(__dirname, 'Uploads');
@@ -31,7 +28,7 @@ const storage = multer.diskStorage({
       .replace(/\s+/g, '-')
       .replace(/[^a-zA-Z0-9.-]/g, '')
       .toLowerCase();
-    const finalName = `produto_${cleanName}${path.extname(file.originalname)}`;
+    const finalName = `produto_${Date.now()}_${cleanName}${path.extname(file.originalname)}`;
     console.log(`Gerando nome de arquivo: ${finalName}`);
     cb(null, finalName);
   }
@@ -45,10 +42,9 @@ const upload = multer({
       cb(new Error('Apenas imagens são permitidas!'), false);
     }
   },
-  limits: { fileSize: 2 * 1024 * 1024 } // Máximo 2MB por imagem
+  limits: { fileSize: 2 * 1024 * 1024 }
 });
 
-// Servir arquivos estáticos (imagens) da pasta Uploads
 app.use('/Uploads', express.static(path.join(__dirname, 'Uploads'), {
   setHeaders: (res, filePath) => {
     console.log(`Servindo arquivo: ${filePath}`);
@@ -56,12 +52,10 @@ app.use('/Uploads', express.static(path.join(__dirname, 'Uploads'), {
   }
 }));
 
-// Função para gerar ID único
 function generateId() {
   return Date.now().toString() + Math.random().toString(36).substr(2, 9);
 }
 
-// Função para validar URL
 function isValidUrl(string) {
   try {
     new URL(string);
@@ -71,7 +65,6 @@ function isValidUrl(string) {
   }
 }
 
-// Middleware para verificar autenticação
 function checkAuth(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer temp-token-')) {
@@ -81,7 +74,6 @@ function checkAuth(req, res, next) {
   next();
 }
 
-// Middleware para logging de erros
 function logError(error, req) {
   console.error(`❌ Erro [${req.method} ${req.url}]:`, {
     message: error.message,
@@ -92,22 +84,20 @@ function logError(error, req) {
   });
 }
 
-// Endpoint para upload de imagens
-app.post('/api/upload', checkAuth, upload.array('imagens', 3), (req, res) => {
+app.post('/api/upload', /*checkAuth,*/ upload.array('imagens', 3), (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: 'Nenhuma imagem enviada' });
     }
-    const urls = req.files.map(file => `/Uploads/${file.filename}`);
-    console.log('Imagens enviadas para Uploads (mover manualmente para GitHub):', urls);
-    res.json({ urls, message: 'Imagens salvas em /Uploads. Faça upload manual para o GitHub (pasta imagens) e atualize o produtos.json com os URLs do GitHub.' });
+    const urls = req.files.map(file => `${API_URL}/Uploads/${file.filename}`);
+    console.log('Imagens enviadas:', urls);
+    res.json({ urls, message: 'Imagens enviadas com sucesso' });
   } catch (error) {
     logError(error, req);
     res.status(500).json({ error: 'Erro ao fazer upload de imagens', details: error.message });
   }
 });
 
-// Endpoint para listar produtos
 app.get('/api/produtos', (req, res) => {
   try {
     const produtosPath = path.join(__dirname, 'produtos.json');
@@ -118,7 +108,7 @@ app.get('/api/produtos', (req, res) => {
     }
     const produtos = JSON.parse(fs.readFileSync(produtosPath, 'utf-8'));
 
-    const { page = 1, limit = 8, categoria, loja } = req.query;
+    const { page = 1, limit = 10, categoria, loja } = req.query;
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
 
@@ -129,10 +119,10 @@ app.get('/api/produtos', (req, res) => {
 
     let filteredProdutos = produtos;
     if (categoria) {
-      filteredProdutos = filteredProdutos.filter(p => p.categoria === categoria);
+      filteredProdutos = filteredProdutos.filter(p => p.categoria && p.categoria.toLowerCase() === categoria.toLowerCase());
     }
     if (loja) {
-      filteredProdutos = filteredProdutos.filter(p => p.loja === loja);
+      filteredProdutos = filteredProdutos.filter(p => p.loja && p.loja.toLowerCase() === loja.toLowerCase());
     }
 
     const start = (pageNum - 1) * limitNum;
@@ -149,8 +139,26 @@ app.get('/api/produtos', (req, res) => {
   }
 });
 
-// Endpoint para adicionar produto
-app.post('/api/produtos', checkAuth, upload.array('imagens', 3), (req, res) => {
+app.get('/api/produtos/:id', /*checkAuth,*/ (req, res) => {
+  try {
+    const produtosPath = path.join(__dirname, 'produtos.json');
+    if (!fs.existsSync(produtosPath)) {
+      return res.status(404).json({ error: 'Nenhum produto cadastrado' });
+    }
+    const produtos = JSON.parse(fs.readFileSync(produtosPath, 'utf-8'));
+    const { id } = req.params;
+    const produto = produtos.find(p => p._id === id);
+    if (!produto) {
+      return res.status(404).json({ error: 'Produto não encontrado' });
+    }
+    res.json(produto);
+  } catch (error) {
+    logError(error, req);
+    res.status(500).json({ error: 'Erro ao buscar produto', details: error.message });
+  }
+});
+
+app.post('/api/produtos', /*checkAuth,*/ upload.array('imagens', 3), (req, res) => {
   try {
     const produtosPath = path.join(__dirname, 'produtos.json');
     if (!fs.existsSync(produtosPath)) {
@@ -176,7 +184,7 @@ app.post('/api/produtos', checkAuth, upload.array('imagens', 3), (req, res) => {
       return res.status(400).json({ error: 'O preço deve ser um número maior que zero' });
     }
 
-    const imagens = req.files.map(file => `/Uploads/${file.filename}`);
+    const imagens = req.files.map(file => `${API_URL}/Uploads/${file.filename}`);
     const produto = {
       _id: generateId(),
       nome,
@@ -192,17 +200,15 @@ app.post('/api/produtos', checkAuth, upload.array('imagens', 3), (req, res) => {
     produtos.push(produto);
     fs.writeFileSync(produtosPath, JSON.stringify(produtos, null, 2), 'utf-8');
     console.log('Produto adicionado:', produto);
-    console.log('Aviso: Imagens salvas em /Uploads. Faça upload manual para o GitHub (pasta imagens) e atualize o produtos.json com os URLs do GitHub.');
 
-    res.status(201).json({ produto, message: 'Produto adicionado. Faça upload das imagens para o GitHub (pasta imagens) e atualize o produtos.json com os URLs do GitHub.' });
+    res.status(201).json({ produto, message: 'Produto adicionado com sucesso' });
   } catch (error) {
     logError(error, req);
     res.status(500).json({ error: 'Erro ao adicionar produto', details: error.message });
   }
 });
 
-// Endpoint para atualizar produto
-app.put('/api/produtos/:id', checkAuth, upload.array('imagens', 3), (req, res) => {
+app.put('/api/produtos/:id', /*checkAuth,*/ upload.array('imagens', 3), (req, res) => {
   try {
     const produtosPath = path.join(__dirname, 'produtos.json');
     if (!fs.existsSync(produtosPath)) {
@@ -233,12 +239,11 @@ app.put('/api/produtos/:id', checkAuth, upload.array('imagens', 3), (req, res) =
       return res.status(400).json({ error: 'O preço deve ser um número maior que zero' });
     }
 
-    // Remover imagens antigas, se novas forem enviadas
     if (req.files.length > 0) {
       const imagensAntigas = produtos[produtoIndex].imagens || [];
       imagensAntigas.forEach(img => {
-        if (img.startsWith('/Uploads/')) {
-          const imgPath = path.join(__dirname, img.replace('/Uploads/', 'Uploads/'));
+        if (img.includes('/Uploads/')) {
+          const imgPath = path.join(__dirname, img.replace(`${API_URL}/Uploads/`, 'Uploads/'));
           if (fs.existsSync(imgPath)) {
             fs.unlinkSync(imgPath);
             console.log('Imagem antiga removida:', imgPath);
@@ -248,7 +253,7 @@ app.put('/api/produtos/:id', checkAuth, upload.array('imagens', 3), (req, res) =
     }
 
     const imagens = req.files.length > 0
-      ? req.files.map(file => `/Uploads/${file.filename}`)
+      ? req.files.map(file => `${API_URL}/Uploads/${file.filename}`)
       : produtos[produtoIndex].imagens;
 
     const updatedProduto = {
@@ -266,17 +271,15 @@ app.put('/api/produtos/:id', checkAuth, upload.array('imagens', 3), (req, res) =
     produtos[produtoIndex] = updatedProduto;
     fs.writeFileSync(produtosPath, JSON.stringify(produtos, null, 2), 'utf-8');
     console.log('Produto atualizado:', updatedProduto);
-    console.log('Aviso: Imagens salvas em /Uploads. Faça upload manual para o GitHub (pasta imagens) e atualize o produtos.json com os URLs do GitHub.');
 
-    res.json({ produto: updatedProduto, message: 'Produto atualizado. Faça upload das imagens para o GitHub (pasta imagens) e atualize o produtos.json com os URLs do GitHub.' });
+    res.json({ produto: updatedProduto, message: 'Produto atualizado com sucesso' });
   } catch (error) {
     logError(error, req);
     res.status(500).json({ error: 'Erro ao atualizar produto', details: error.message });
   }
 });
 
-// Endpoint para excluir produto
-app.delete('/api/produtos/:id', checkAuth, (req, res) => {
+app.delete('/api/produtos/:id', /*checkAuth,*/ (req, res) => {
   try {
     const produtosPath = path.join(__dirname, 'produtos.json');
     if (!fs.existsSync(produtosPath)) {
@@ -290,11 +293,10 @@ app.delete('/api/produtos/:id', checkAuth, (req, res) => {
       return res.status(404).json({ error: 'Produto não encontrado' });
     }
 
-    // Remover imagens associadas (apenas da pasta Uploads)
     const imagens = produtos[produtoIndex].imagens || [];
     imagens.forEach(img => {
-      if (img.startsWith('/Uploads/')) {
-        const imgPath = path.join(__dirname, img.replace('/Uploads/', 'Uploads/'));
+      if (img.includes('/Uploads/')) {
+        const imgPath = path.join(__dirname, img.replace(`${API_URL}/Uploads/`, 'Uploads/'));
         if (fs.existsSync(imgPath)) {
           fs.unlinkSync(imgPath);
           console.log('Imagem removida:', imgPath);
@@ -313,7 +315,6 @@ app.delete('/api/produtos/:id', checkAuth, (req, res) => {
   }
 });
 
-// Middleware para tratamento de erros gerais
 app.use((err, req, res, next) => {
   logError(err, req);
   if (err.message === 'Apenas imagens são permitidas!') {
@@ -325,16 +326,14 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Erro interno do servidor', details: err.message });
 });
 
-// Iniciar o servidor
 const PORT = process.env.PORT || 10000;
+const API_URL = process.env.API_URL || `https://centrodecompra-backend.onrender.com`;
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
   console.log(`Diretório de uploads: ${path.join(__dirname, 'Uploads')}`);
   console.log(`Diretório de produtos: ${path.join(__dirname, 'produtos.json')}`);
-  console.log('Aviso: Imagens são salvas em /Uploads. Faça upload manual para o GitHub (pasta imagens) e atualize o produtos.json com os URLs do GitHub.');
 });
 
-// Manipulador de erros não capturados
 process.on('uncaughtException', (err) => {
   console.error('❌ Erro não capturado:', {
     message: err.message,
