@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const fs = require('fs');
+const fs = require('fs').promises; // Usar fs.promises para operações assíncronas
 const multer = require('multer');
 const app = express();
 
@@ -15,13 +15,17 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const uploadDir = path.join(__dirname, 'Uploads');
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-      fs.chmodSync(uploadDir, '755');
+  destination: async (req, file, cb) => {
+    const uploadDir = path.join(__dirname, 'data', 'Uploads');
+    try {
+      await fs.access(uploadDir).catch(async () => {
+        await fs.mkdir(uploadDir, { recursive: true });
+        await fs.chmod(uploadDir, '755');
+      });
+      cb(null, uploadDir);
+    } catch (error) {
+      cb(error);
     }
-    cb(null, uploadDir);
   },
   filename: (req, file, cb) => {
     const cleanName = file.originalname
@@ -33,6 +37,7 @@ const storage = multer.diskStorage({
     cb(null, finalName);
   }
 });
+
 const upload = multer({
   storage: storage,
   fileFilter: (req, file, cb) => {
@@ -45,7 +50,7 @@ const upload = multer({
   limits: { fileSize: 2 * 1024 * 1024 }
 });
 
-app.use('/Uploads', express.static(path.join(__dirname, 'Uploads'), {
+app.use('/Uploads', express.static(path.join(__dirname, 'data', 'Uploads'), {
   setHeaders: (res, filePath) => {
     console.log(`Servindo arquivo: ${filePath}`);
     res.setHeader('Cache-Control', 'public, max-age=31536000');
@@ -65,15 +70,6 @@ function isValidUrl(string) {
   }
 }
 
-function checkAuth(req, res, next) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer temp-token-')) {
-    console.error('Autenticação falhou: Token inválido ou ausente', { authHeader });
-    return res.status(401).json({ error: 'Acesso não autorizado' });
-  }
-  next();
-}
-
 function logError(error, req) {
   console.error(`❌ Erro [${req.method} ${req.url}]:`, {
     message: error.message,
@@ -84,7 +80,7 @@ function logError(error, req) {
   });
 }
 
-app.post('/api/upload', /*checkAuth,*/ upload.array('imagens', 3), (req, res) => {
+app.post('/api/upload', upload.array('imagens', 3), async (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: 'Nenhuma imagem enviada' });
@@ -98,17 +94,19 @@ app.post('/api/upload', /*checkAuth,*/ upload.array('imagens', 3), (req, res) =>
   }
 });
 
-app.get('/api/produtos', (req, res) => {
+app.get('/api/produtos', async (req, res) => {
   try {
-    const produtosPath = path.join(__dirname, 'produtos.json');
-    if (!fs.existsSync(produtosPath)) {
-      fs.writeFileSync(produtosPath, '[]', 'utf-8');
+    const produtosPath = path.join(__dirname, 'data', 'produtos.json');
+    let produtos = [];
+    try {
+      await fs.access(produtosPath);
+      produtos = JSON.parse(await fs.readFile(produtosPath, 'utf-8'));
+    } catch (error) {
+      await fs.writeFile(produtosPath, '[]', 'utf-8');
       console.log('Arquivo produtos.json criado');
-      return res.json({ produtos: [], total: 0 });
     }
-    const produtos = JSON.parse(fs.readFileSync(produtosPath, 'utf-8'));
 
-    const { page = 1, limit = 10, categoria, loja } = req.query;
+    const { page = 1, limit = 25, categoria, loja } = req.query; // Ajustado para limit=25
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
 
@@ -139,18 +137,23 @@ app.get('/api/produtos', (req, res) => {
   }
 });
 
-app.get('/api/produtos/:id', /*checkAuth,*/ (req, res) => {
+app.get('/api/produtos/:id', async (req, res) => {
   try {
-    const produtosPath = path.join(__dirname, 'produtos.json');
-    if (!fs.existsSync(produtosPath)) {
+    const produtosPath = path.join(__dirname, 'data', 'produtos.json');
+    let produtos = [];
+    try {
+      await fs.access(produtosPath);
+      produtos = JSON.parse(await fs.readFile(produtosPath, 'utf-8'));
+    } catch (error) {
       return res.status(404).json({ error: 'Nenhum produto cadastrado' });
     }
-    const produtos = JSON.parse(fs.readFileSync(produtosPath, 'utf-8'));
+
     const { id } = req.params;
     const produto = produtos.find(p => p._id === id);
     if (!produto) {
       return res.status(404).json({ error: 'Produto não encontrado' });
     }
+    console.log('Produto encontrado:', produto);
     res.json(produto);
   } catch (error) {
     logError(error, req);
@@ -158,14 +161,17 @@ app.get('/api/produtos/:id', /*checkAuth,*/ (req, res) => {
   }
 });
 
-app.post('/api/produtos', /*checkAuth,*/ upload.array('imagens', 3), (req, res) => {
+app.post('/api/produtos', upload.array('imagens', 3), async (req, res) => {
   try {
-    const produtosPath = path.join(__dirname, 'produtos.json');
-    if (!fs.existsSync(produtosPath)) {
-      fs.writeFileSync(produtosPath, '[]', 'utf-8');
+    const produtosPath = path.join(__dirname, 'data', 'produtos.json');
+    let produtos = [];
+    try {
+      await fs.access(produtosPath);
+      produtos = JSON.parse(await fs.readFile(produtosPath, 'utf-8'));
+    } catch (error) {
+      await fs.writeFile(produtosPath, '[]', 'utf-8');
       console.log('Arquivo produtos.json criado');
     }
-    const produtos = JSON.parse(fs.readFileSync(produtosPath, 'utf-8'));
 
     const { nome, descricao, categoria, loja, link, preco } = req.body;
     if (!nome || !descricao || !categoria || !loja || !link || !preco) {
@@ -198,7 +204,7 @@ app.post('/api/produtos', /*checkAuth,*/ upload.array('imagens', 3), (req, res) 
     };
 
     produtos.push(produto);
-    fs.writeFileSync(produtosPath, JSON.stringify(produtos, null, 2), 'utf-8');
+    await fs.writeFile(produtosPath, JSON.stringify(produtos, null, 2), 'utf-8');
     console.log('Produto adicionado:', produto);
 
     res.status(201).json({ produto, message: 'Produto adicionado com sucesso' });
@@ -208,13 +214,16 @@ app.post('/api/produtos', /*checkAuth,*/ upload.array('imagens', 3), (req, res) 
   }
 });
 
-app.put('/api/produtos/:id', /*checkAuth,*/ upload.array('imagens', 3), (req, res) => {
+app.put('/api/produtos/:id', upload.array('imagens', 3), async (req, res) => {
   try {
-    const produtosPath = path.join(__dirname, 'produtos.json');
-    if (!fs.existsSync(produtosPath)) {
+    const produtosPath = path.join(__dirname, 'data', 'produtos.json');
+    let produtos = [];
+    try {
+      await fs.access(produtosPath);
+      produtos = JSON.parse(await fs.readFile(produtosPath, 'utf-8'));
+    } catch (error) {
       return res.status(404).json({ error: 'Nenhum produto cadastrado' });
     }
-    const produtos = JSON.parse(fs.readFileSync(produtosPath, 'utf-8'));
 
     const { id } = req.params;
     const produtoIndex = produtos.findIndex(p => p._id === id);
@@ -241,15 +250,18 @@ app.put('/api/produtos/:id', /*checkAuth,*/ upload.array('imagens', 3), (req, re
 
     if (req.files.length > 0) {
       const imagensAntigas = produtos[produtoIndex].imagens || [];
-      imagensAntigas.forEach(img => {
+      for (const img of imagensAntigas) {
         if (img.includes('/Uploads/')) {
-          const imgPath = path.join(__dirname, img.replace(`${API_URL}/Uploads/`, 'Uploads/'));
-          if (fs.existsSync(imgPath)) {
-            fs.unlinkSync(imgPath);
+          const imgPath = path.join(__dirname, 'data', img.replace(`${API_URL}/Uploads/`, 'Uploads/'));
+          try {
+            await fs.access(imgPath);
+            await fs.unlink(imgPath);
             console.log('Imagem antiga removida:', imgPath);
+          } catch (error) {
+            console.log('Imagem antiga não encontrada, ignorando:', imgPath);
           }
         }
-      });
+      }
     }
 
     const imagens = req.files.length > 0
@@ -269,7 +281,7 @@ app.put('/api/produtos/:id', /*checkAuth,*/ upload.array('imagens', 3), (req, re
     };
 
     produtos[produtoIndex] = updatedProduto;
-    fs.writeFileSync(produtosPath, JSON.stringify(produtos, null, 2), 'utf-8');
+    await fs.writeFile(produtosPath, JSON.stringify(produtos, null, 2), 'utf-8');
     console.log('Produto atualizado:', updatedProduto);
 
     res.json({ produto: updatedProduto, message: 'Produto atualizado com sucesso' });
@@ -279,13 +291,16 @@ app.put('/api/produtos/:id', /*checkAuth,*/ upload.array('imagens', 3), (req, re
   }
 });
 
-app.delete('/api/produtos/:id', /*checkAuth,*/ (req, res) => {
+app.delete('/api/produtos/:id', async (req, res) => {
   try {
-    const produtosPath = path.join(__dirname, 'produtos.json');
-    if (!fs.existsSync(produtosPath)) {
+    const produtosPath = path.join(__dirname, 'data', 'produtos.json');
+    let produtos = [];
+    try {
+      await fs.access(produtosPath);
+      produtos = JSON.parse(await fs.readFile(produtosPath, 'utf-8'));
+    } catch (error) {
       return res.status(404).json({ error: 'Nenhum produto cadastrado' });
     }
-    const produtos = JSON.parse(fs.readFileSync(produtosPath, 'utf-8'));
 
     const { id } = req.params;
     const produtoIndex = produtos.findIndex(p => p._id === id);
@@ -294,18 +309,21 @@ app.delete('/api/produtos/:id', /*checkAuth,*/ (req, res) => {
     }
 
     const imagens = produtos[produtoIndex].imagens || [];
-    imagens.forEach(img => {
+    for (const img of imagens) {
       if (img.includes('/Uploads/')) {
-        const imgPath = path.join(__dirname, img.replace(`${API_URL}/Uploads/`, 'Uploads/'));
-        if (fs.existsSync(imgPath)) {
-          fs.unlinkSync(imgPath);
+        const imgPath = path.join(__dirname, 'data', img.replace(`${API_URL}/Uploads/`, 'Uploads/'));
+        try {
+          await fs.access(imgPath);
+          await fs.unlink(imgPath);
           console.log('Imagem removida:', imgPath);
+        } catch (error) {
+          console.log('Imagem não encontrada, ignorando:', imgPath);
         }
       }
-    });
+    }
 
     const deletedProduto = produtos.splice(produtoIndex, 1)[0];
-    fs.writeFileSync(produtosPath, JSON.stringify(produtos, null, 2), 'utf-8');
+    await fs.writeFile(produtosPath, JSON.stringify(produtos, null, 2), 'utf-8');
     console.log('Produto excluído:', deletedProduto);
 
     res.json({ message: 'Produto excluído com sucesso' });
@@ -330,8 +348,8 @@ const PORT = process.env.PORT || 10000;
 const API_URL = process.env.API_URL || `https://centrodecompra-backend.onrender.com`;
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
-  console.log(`Diretório de uploads: ${path.join(__dirname, 'Uploads')}`);
-  console.log(`Diretório de produtos: ${path.join(__dirname, 'produtos.json')}`);
+  console.log(`Diretório de uploads: ${path.join(__dirname, 'data', 'Uploads')}`);
+  console.log(`Diretório de produtos: ${path.join(__dirname, 'data', 'produtos.json')}`);
 });
 
 process.on('uncaughtException', (err) => {
